@@ -165,7 +165,7 @@ def main():
       # hash to bytes
       features_dict = {
         'sequence': feature_bytes(seq_1hot),
-        'target': feature_bytes(targets[si,:,:])
+        'target': feature_bytes(targets[si,:,:]),
         'seq_num': feature_bytes(sequence_number)
         }
 
