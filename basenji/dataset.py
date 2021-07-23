@@ -26,6 +26,7 @@ import tensorflow as tf
 # TFRecord constants
 TFR_INPUT = 'sequence'
 TFR_OUTPUT = 'target'
+TFR_METADATA = 'seq_num'
 
 def file_to_records(filename):
   return tf.data.TFRecordDataset(filename, compression_type='ZLIB')
@@ -75,7 +76,8 @@ class SeqDataset:
       # define features
       features = {
         TFR_INPUT: tf.io.FixedLenFeature([], tf.string),
-        TFR_OUTPUT: tf.io.FixedLenFeature([], tf.string)
+        TFR_OUTPUT: tf.io.FixedLenFeature([], tf.string),
+        TFR_METADATA: tf.io.FixedLenFeature([], tf.string)
       }
 
       # parse example into features
@@ -96,7 +98,9 @@ class SeqDataset:
         targets = tf.reshape(targets, [self.target_length, self.num_targets])
         targets = tf.cast(targets, tf.float32)
 
-      return sequence, targets
+      seq_num = tf.io.decode_raw(parsed_features[TFR_METADATA], tf.uint8)
+
+      return sequence, targets, seq_num
 
     return parse_proto
 
@@ -164,7 +168,7 @@ class SeqDataset:
       targets_nonzero = np.zeros(self.num_targets, dtype='bool')
 
     # for (seq_raw, genome), targets_raw in dataset:
-    for seq_raw, targets_raw in dataset:
+    for seq_raw, targets_raw, seq_num in dataset:
       # infer seq_depth
       seq_1hot = seq_raw.numpy().reshape((self.seq_length,-1))
       if self.seq_depth is None:
@@ -193,7 +197,7 @@ class SeqDataset:
       print('%s has %d sequences with 0 targets' % (self.tfr_path, self.num_seqs), flush=True)
 
 
-  def numpy(self, return_inputs=True, return_outputs=True, step=1):
+  def numpy(self, return_inputs=True, return_outputs=True, return_metadata=False, step=1):
     """ Convert TFR inputs and/or outputs to numpy arrays."""
     with tf.name_scope('numpy'):
       # initialize dataset from TFRecords glob
@@ -212,9 +216,10 @@ class SeqDataset:
     # initialize inputs and outputs
     seqs_1hot = []
     targets = []
+    seq_nums = []
 
     # collect inputs and outputs
-    for seq_raw, targets_raw in dataset:
+    for seq_raw, targets_raw, seq_num in dataset:
       # sequence
       if return_inputs:
         seq_1hot = seq_raw.numpy().reshape((self.seq_length,-1))
@@ -231,13 +236,18 @@ class SeqDataset:
           targets1 = targets1[step_i,:]
         targets.append(targets1)
 
+      # sequence numbers
+      if return_metadata:
+        seq_nums.append(int(seq_num[0]))
+
     # make arrays
     seqs_1hot = np.array(seqs_1hot)
     targets = np.array(targets)
+    seq_nums = np.array(seq_nums)
 
     # return
-    if return_inputs and return_outputs:
-      return seqs_1hot, targets
+    if return_inputs and return_outputs and return_metadata:
+      return seqs_1hot, targets, seq_nums
     elif return_inputs:
       return seqs_1hot
     else:

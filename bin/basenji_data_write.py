@@ -160,10 +160,13 @@ def main():
       seq_1hot = dna_1hot(seq_dna)
       # seq_1hot = dna_1hot_index(seq_dna) # more efficient, but fighting inertia
 
+      sequence_number = np.array([si])
+
       # hash to bytes
       features_dict = {
         'sequence': feature_bytes(seq_1hot),
         'target': feature_bytes(targets[si,:,:])
+        'seq_num': feature_bytes(sequence_number)
         }
 
       # add unmappability
