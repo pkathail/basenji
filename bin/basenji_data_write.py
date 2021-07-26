@@ -160,7 +160,7 @@ def main():
       seq_1hot = dna_1hot(seq_dna)
       # seq_1hot = dna_1hot_index(seq_dna) # more efficient, but fighting inertia
 
-      sequence_number = np.array([si])
+      sequence_number = np.array([msi])
 
       # hash to bytes
       features_dict = {
