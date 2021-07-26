@@ -238,8 +238,8 @@ class SeqDataset:
 
       # sequence numbers
       if return_metadata:
-        seq_nums.append(int(seq_num[0]))
-
+        seq_nums.append(int(seq_num.numpy()[0][0]))
+    
     # make arrays
     seqs_1hot = np.array(seqs_1hot)
     targets = np.array(targets)
