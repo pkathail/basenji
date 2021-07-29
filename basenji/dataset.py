@@ -98,7 +98,7 @@ class SeqDataset:
         targets = tf.reshape(targets, [self.target_length, self.num_targets])
         targets = tf.cast(targets, tf.float32)
 
-      seq_num = tf.io.decode_raw(parsed_features[TFR_METADATA], tf.uint8)
+      seq_num = tf.io.decode_raw(parsed_features[TFR_METADATA], tf.int64)
 
       return sequence, targets, seq_num
 
