@@ -19,12 +19,20 @@ import random
 import sys
 
 import numpy as np
+import pandas as pd
 
 ################################################################################
 # io.py
 #
 # Methods to load the training data.
 ################################################################################
+
+NT_1HOT_MAPPING = pd.Series({"A": 0, "C": 1, "G": 2, "T": 3})
+IUPAC_MAPPING = pd.Series({"A": ["A"], "C": ["C"], "G": ["G"], "T": ["T"],
+                         "R": ["A", "G"], "Y": ["C", "T"], "S": ["G", "C"],
+                         "W": ["A", "T"], "K": ["G", "T"], "M": ["A", "C"],
+                         "B": ["C", "G", "T"], "D": ["A", "G", "T"],
+                         "H": ["A", "C", "T"], "V": ["A", "C", "G"]})
 
 def dna_1hot(seq, seq_len=None, n_uniform=False):
   """ dna_1hot
@@ -38,19 +46,7 @@ def dna_1hot(seq, seq_len=None, n_uniform=False):
     Returns:
       seq_code: length by nucleotides array representation.
     """
-  if seq_len is None:
-    seq_len = len(seq)
-    seq_start = 0
-  else:
-    if seq_len <= len(seq):
-      # trim the sequence
-      seq_trim = (len(seq) - seq_len) // 2
-      seq = seq[seq_trim:seq_trim + seq_len]
-      seq_start = 0
-    else:
-      seq_start = (seq_len - len(seq)) // 2
-
-  seq = seq.upper()
+  seq, seq_start, seq_len = format_sequence(seq, seq_len)
 
   # map nt's to a matrix len(seq)x4 of 0's and 1's.
   if n_uniform:
@@ -75,6 +71,39 @@ def dna_1hot(seq, seq_len=None, n_uniform=False):
         else:
           ni = random.randint(0,3)
           seq_code[i, ni] = 1          
+
+  return seq_code
+
+
+def dna_1hot_iupac(seq, seq_len=None, n_uniform=False):
+  """ dna_1hot_iupac
+
+    Args:
+      seq:       nucleotide sequence.
+      seq_len:   length to extend/trim sequences to.
+      n_uniform: represent N's as 0.25, forcing float16,
+                 rather than sampling.
+
+    Returns:
+      seq_code: length by nucleotides array representation, using IUPAC coding of heterozygous sites
+    """
+  seq, seq_start, seq_len = format_sequence(seq, seq_len)
+
+  # map nt's to a matrix len(seq)x4 of 0's and 1's.
+  seq_code = np.zeros((seq_len, 4), dtype='float16')
+
+  for i in range(seq_len):
+    if i >= seq_start and i - seq_start < len(seq):
+      nt = seq[i - seq_start]
+      if nt in IUPAC_MAPPING.index:
+        iupac_nts = IUPAC_MAPPING.loc[nt]
+        seq_code[i, NT_1HOT_MAPPING.loc[iupac_nts].values] = 1/len(iupac_nts)
+      else:
+        if n_uniform:
+          seq_code[i, :] = 0.25
+        else:
+          ni = random.randint(0,3)
+          seq_code[i, ni] = 1
 
   return seq_code
 
@@ -321,3 +350,22 @@ def hot1_set(seq_1hot, pos, nt):
 
 def dna_rc(seq):
   return seq.translate(str.maketrans("ATCGatcg","TAGCtagc"))[::-1]
+
+
+def format_sequence(seq, seq_len):
+  """ Format sequence as uppercase, trim sequence to desired length if needed """
+  if seq_len is None:
+    seq_len = len(seq)
+    seq_start = 0
+  else:
+    if seq_len <= len(seq):
+      # trim the sequence
+      seq_trim = (len(seq) - seq_len) // 2
+      seq = seq[seq_trim:seq_trim + seq_len]
+      seq_start = 0
+    else:
+      seq_start = (seq_len - len(seq)) // 2
+
+  seq = seq.upper()
+
+  return seq, seq_start, seq_len

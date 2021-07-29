@@ -23,7 +23,7 @@ import pdb
 import pysam
 
 from basenji_data import ModelSeq
-from basenji.dna_io import dna_1hot, dna_1hot_index
+from basenji.dna_io import dna_1hot, dna_1hot_index, dna_1hot_iupac
 
 import tensorflow as tf
 
@@ -157,7 +157,8 @@ def main():
       seq_dna = fasta_open.fetch(mseq.chr, mseq.start, mseq.end)
 
       # one hot code
-      seq_1hot = dna_1hot(seq_dna)
+      seq_1hot = dna_1hot_iupac(seq_dna)
+      # seq_1hot = dna_1hot(seq_dna)
       # seq_1hot = dna_1hot_index(seq_dna) # more efficient, but fighting inertia
 
       # hash to bytes
