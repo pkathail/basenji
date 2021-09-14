@@ -170,7 +170,7 @@ def main():
 
   if options.save or options.peaks or options.accuracy_indexes is not None:
     # compute predictions
-    test_preds = seqnn_model.predict(eval_data).astype('float16')
+    test_preds = seqnn_model.predict(eval_data)
 
     # read targets
     test_targets = eval_data.numpy(return_inputs=False)

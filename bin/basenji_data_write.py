@@ -112,7 +112,7 @@ def main():
     num_targets_tfr = options.target_extend
 
   # initialize targets
-  targets = np.zeros((num_seqs, seq_pool_len, num_targets_tfr), dtype='float16')
+  targets = np.zeros((num_seqs, seq_pool_len, num_targets_tfr), dtype='float32')
 
   # read each target
   for ti in range(num_targets):

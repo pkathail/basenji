@@ -189,13 +189,13 @@ def main():
   #################################################################
   # setup output
 
-  assert(preds_length % 2 == 0)
+  #assert(preds_length % 2 == 0)
   preds_mid = preds_length // 2
 
   assert(options.site_length % preds_window == 0)
   site_preds_length = options.site_length // preds_window
 
-  assert(site_preds_length % 2 == 0)
+  #assert(site_preds_length % 2 == 0)
   site_preds_start = preds_mid - site_preds_length//2
   site_preds_end = site_preds_start + site_preds_length
 
@@ -207,9 +207,9 @@ def main():
 
   # create predictions
   if options.sum:
-    out_h5.create_dataset('preds', shape=(num_seqs, preds_depth), dtype='float16')
+    out_h5.create_dataset('preds', shape=(num_seqs, preds_depth), dtype='float64')
   else:
-    out_h5.create_dataset('preds', shape=(num_seqs, site_preds_length, preds_depth), dtype='float16')
+    out_h5.create_dataset('preds', shape=(num_seqs, site_preds_length, preds_depth), dtype='float64')
 
   # store site coordinates
   site_seqs_chr, site_seqs_start, site_seqs_end = zip(*site_seqs_coords)
