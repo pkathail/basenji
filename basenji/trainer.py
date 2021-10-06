@@ -26,6 +26,11 @@ from tensorflow.python.framework import dtypes
 from basenji import layers
 from basenji import metrics
 
+def multi_loss(y_true, y_pred):
+    mse = tf.keras.losses.MeanSquaredError() 
+    p = tf.keras.losses.Poisson()
+    return mse(y_true[:,:,:10], y_pred[:,:,:10]) + p(y_true[:,:,10], y_pred[:,:,10]) 
+
 class Trainer:
   def __init__(self, params, train_data, eval_data, out_dir):
     self.params = params
@@ -41,9 +46,11 @@ class Trainer:
     # loss
     self.loss = self.params.get('loss','poisson').lower()
     if self.loss == 'mse':
-      self.loss_fn = tf.keras.losses.MSE
+      self.loss_fn = tf.keras.losses.MeanSquaredError()
     elif self.loss == 'bce':
       self.loss_fn = tf.keras.losses.BinaryCrossentropy()
+    elif self.loss == 'multi':
+      self.loss_fn = multi_loss 
     else:
       self.loss_fn = tf.keras.losses.Poisson()
 
@@ -83,7 +90,7 @@ class Trainer:
     if not self.compiled:
       self.compile(seqnn_model)
 
-    if self.loss == 'bce':
+    if self.loss in ['bce', 'multi']:
       early_stop = EarlyStoppingMin(monitor='val_loss', mode='min', verbose=1,
                        patience=self.patience, min_epoch=self.train_epochs_min)
       save_best = tf.keras.callbacks.ModelCheckpoint('%s/model_best.h5'%self.out_dir,

@@ -26,6 +26,11 @@ from basenji import blocks
 from basenji import layers
 from basenji import metrics
 
+def multi_loss(y_true, y_pred):
+    mse = tf.keras.losses.MeanSquaredError()
+    p = tf.keras.losses.Poisson()
+    return mse(y_true[:,:,:10], y_pred[:,:,:10]) + p(y_true[:,:,10], y_pred[:,:,10])
+
 class SeqNN():
 
   def __init__(self, params):
@@ -251,6 +256,11 @@ class SeqNN():
                     loss=loss,
                     metrics=[metrics.SeqAUC(curve='ROC', summarize=False),
                              metrics.SeqAUC(curve='PR', summarize=False)])
+    elif loss == 'multi':
+      model.compile(optimizer=tf.keras.optimizers.SGD(),
+                    loss=multi_loss,
+                    metrics=[metrics.PearsonR(num_targets, summarize=False),
+                             metrics.R2(num_targets, summarize=False)])    
     else:      
       model.compile(optimizer=tf.keras.optimizers.SGD(),
                     loss=loss,
