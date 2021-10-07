@@ -27,10 +27,10 @@ from basenji import blocks
 from basenji import layers
 from basenji import metrics
 
-def multi_loss(y_true, y_pred, balance=1):
+def multi_loss(y_true, y_pred, balance=1, sample_weight=None):
     mse = tf.keras.losses.MeanSquaredError()
     p = tf.keras.losses.Poisson()
-    return balance*mse(y_true[:,:,:10], y_pred[:,:,:10]) + p(y_true[:,:,10], y_pred[:,:,10])
+    return balance*mse(y_true[:,:,:10], y_pred[:,:,:10], sample_weight=sample_weight) + p(y_true[:,:,10], y_pred[:,:,10], sample_weight=sample_weight)
 
 class SeqNN():
 
