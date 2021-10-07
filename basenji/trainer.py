@@ -16,6 +16,7 @@
 import time
 from packaging import version
 import pdb
+from functools import partial
 
 import numpy as np
 import tensorflow as tf
@@ -25,11 +26,7 @@ from tensorflow.python.framework import dtypes
 
 from basenji import layers
 from basenji import metrics
-
-def multi_loss(y_true, y_pred):
-    mse = tf.keras.losses.MeanSquaredError() 
-    p = tf.keras.losses.Poisson()
-    return mse(y_true[:,:,:10], y_pred[:,:,:10]) + p(y_true[:,:,10], y_pred[:,:,10]) 
+from basenji import seqnn
 
 class Trainer:
   def __init__(self, params, train_data, eval_data, out_dir):
@@ -50,7 +47,7 @@ class Trainer:
     elif self.loss == 'bce':
       self.loss_fn = tf.keras.losses.BinaryCrossentropy()
     elif self.loss == 'multi':
-      self.loss_fn = multi_loss 
+      self.loss_fn = partial(seqnn.multi_loss, alpha=self.params.get('alpha', 1))
     else:
       self.loss_fn = tf.keras.losses.Poisson()
 
