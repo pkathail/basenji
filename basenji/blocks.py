@@ -639,6 +639,9 @@ def final(inputs, units, activation='linear', kernel_initializer='he_normal',
 # depracated, poorly named
 def dense(inputs, units, activation='linear', kernel_initializer='he_normal',
           l2_scale=0, l1_scale=0, **kwargs):
+  
+  if activation == 'tanh_softplus':
+    activation = layers.TanH_Softplus_activation
 
   # apply dense layer
   current = tf.keras.layers.Dense(

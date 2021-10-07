@@ -97,6 +97,16 @@ class Softplus(tf.keras.layers.Layer):
     config['exp_max'] = self.exp_max
     return config
 
+def TanH_Softplus_activation(t):
+  slices = tf.unstack(t, axis=2)
+  activated = []
+  for i, s in enumerate(slices):
+    if i == t.shape[2]-1:
+      activated.append(tf.keras.activations.softplus(s))
+    else:
+      activated.append(tf.keras.activations.tanh(s))
+  return tf.stack(activated, axis=2)
+
 ############################################################
 # Center ops
 ############################################################
