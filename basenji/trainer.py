@@ -47,7 +47,7 @@ class Trainer:
     elif self.loss == 'bce':
       self.loss_fn = tf.keras.losses.BinaryCrossentropy()
     elif self.loss == 'multi':
-      self.loss_fn = partial(seqnn.multi_loss, alpha=self.params.get('alpha', 1))
+      self.loss_fn = partial(seqnn.multi_loss, balance=self.params.get('balance', 1))
     else:
       self.loss_fn = tf.keras.losses.Poisson()
 

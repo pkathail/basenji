@@ -27,10 +27,10 @@ from basenji import blocks
 from basenji import layers
 from basenji import metrics
 
-def multi_loss(y_true, y_pred, alpha=1):
+def multi_loss(y_true, y_pred, balance=1):
     mse = tf.keras.losses.MeanSquaredError()
     p = tf.keras.losses.Poisson()
-    return alpha*mse(y_true[:,:,:10], y_pred[:,:,:10]) + p(y_true[:,:,10], y_pred[:,:,10])
+    return balance*mse(y_true[:,:,:10], y_pred[:,:,:10]) + p(y_true[:,:,10], y_pred[:,:,10])
 
 class SeqNN():
 
@@ -241,7 +241,7 @@ class SeqNN():
         self.model = tf.keras.Model(inputs=sequence, outputs=predictions_slice)
 
 
-  def evaluate(self, seq_data, head_i=0, loss='poisson', alpha=1):
+  def evaluate(self, seq_data, head_i=0, loss='poisson', balance=1):
     """ Evaluate model on SeqDataset. """
     # choose model
     if self.ensemble is None:
@@ -259,7 +259,7 @@ class SeqNN():
                              metrics.SeqAUC(curve='PR', summarize=False)])
     elif loss == 'multi':
       model.compile(optimizer=tf.keras.optimizers.SGD(),
-                    loss=partial(multi_loss, alpha=alpha),
+                    loss=partial(multi_loss, balance=balance),
                     metrics=[metrics.PearsonR(num_targets, summarize=False),
                              metrics.R2(num_targets, summarize=False)])    
     else:      
