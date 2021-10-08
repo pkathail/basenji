@@ -92,8 +92,8 @@ def main():
 
   peak_bed_preds = {}
   for pt in peak_types:
-    for i, chr in all_chrs:
-      preds = h5py.File(f"{predict_peak_bed_dir}/{pt}/chr{chr}/predict.h5", "r")
+    for i, chr in enumerate(all_chrs):
+      preds = h5py.File(f"{options.predict_dir}/{pt}/chr{chr}/predict.h5", "r")
       preds_df = pd.DataFrame(np.squeeze(preds["preds"][:,:,:]), columns=[f"{ct}_pred" for ct in cell_types])  
       preds_df["chrom"] = preds["chrom"][:].astype(str)
       preds_df["start"] = preds["start"][:]
@@ -107,7 +107,8 @@ def main():
   
   for pt in peak_types:
     for ct in cell_types:
-      peak_bed_preds[pt][f"{ct}_target"] = pd.read_csv(f"{TARGET_SIGNAL_DIR}/{pt}/{ct}_target_signal.out", 
+      if ct != "Mean":
+        peak_bed_preds[pt][f"{ct}_target"] = pd.read_csv(f"{TARGET_SIGNAL_DIR}/{pt}/{ct}_target_signal.out", 
                                                          sep="\t",
                                                          names=["name", "size", "covered", "sum", "mean0", "mean"])["sum"].values
 
@@ -119,7 +120,6 @@ def main():
     for pt in peak_types:
         for ct in cell_types:
             if ct != "Mean":
-                peak_bed_preds[pt][f"{ct}_target"] = peak_bed_preds[pt][f"{ct}_target"]*rescale_factor + peak_bed_preds[pt][f"Mean_target"]
                 peak_bed_preds[pt][f"{ct}_pred"] = peak_bed_preds[pt][f"{ct}_pred"]*rescale_factor + peak_bed_preds[pt][f"Mean_pred"]
   
   # calculate performance
