@@ -111,6 +111,7 @@ def main():
         peak_bed_preds[pt][f"{ct}_target"] = pd.read_csv(f"{TARGET_SIGNAL_DIR}/{pt}/{ct}_target_signal.out", 
                                                          sep="\t",
                                                          names=["name", "size", "covered", "sum", "mean0", "mean"])["sum"].values
+    peak_bed_preds[pt][f"Mean_target"] = peak_bed_preds[pt][[f"{ct}_target" for ct in cell_types if ct != "Mean"]].mean(axis=1)
 
     # subset to test chromosomes
     peak_bed_preds[pt] = peak_bed_preds[pt][peak_bed_preds[pt]["chrom"].isin(options.test_chrs)]
