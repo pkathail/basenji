@@ -17,7 +17,7 @@ import seaborn as sns
 from basenji.dna_io import dna_1hot
 
 '''
-basenji_sad_classify.py
+basenji_bench_classify.py
 '''
 
 ################################################################################
@@ -31,10 +31,19 @@ def main():
     parser.add_option('-i', dest='iterations',
             default=1, type='int',
             help='Cross-validation iterations [Default: %default]')
+    parser.add_option('--indel', dest='indel',
+            default=False, action='store_true',
+            help='Add indel size as feature [Default: %default]')
+    parser.add_option('--iscale', dest='indel_scale',
+            default=0.1, type='float',
+            help='Scale indel SAD  [Default: %default]')
     parser.add_option('-l', dest='log',
             default=False, action='store_true')
     parser.add_option('-m', dest='model_pkl',
             help='Dimension reduction model')
+    parser.add_option('--msl', dest='msl',
+            default=1, type='int',
+            help='Random forest min_samples_leaf [Default: %default]')
     parser.add_option('-o', dest='out_dir',
             default='class_out')
     parser.add_option('-p', dest='parallel_threads',
@@ -78,6 +87,19 @@ def main():
         Xp = model.transform(Xp)
         Xn = model.transform(Xn)
 
+    if options.indel:
+        Ip = read_indel(sadp_file)
+        In = read_indel(sadn_file)
+        Ip = np.expand_dims(Ip, axis=-1)
+        In = np.expand_dims(In, axis=-1)
+        Xp = np.concatenate([Xp,Ip], axis=1)
+        Xn = np.concatenate([Xn,In], axis=1)
+    elif options.indel_scale != 1:
+        Ip = read_indel(sadp_file, indel_bool=True)
+        In = read_indel(sadn_file, indel_bool=True)
+        Xp[Ip] = options.indel_scale*Xp[Ip]
+        Xn[Ip] = options.indel_scale*Xn[Ip]
+
     # combine
     X = np.concatenate([Xp, Xn], axis=0)
     y = np.array([True]*Xp.shape[0] + [False]*Xn.shape[0], dtype='bool')
@@ -88,15 +110,15 @@ def main():
     else:
         # aurocs, fpr_folds, tpr_folds, fpr_full, tpr_full = ridge_roc(X, y, folds=8, alpha=10000)
         aurocs, fpr_folds, tpr_folds, fpr_mean, tpr_mean, preds = randfor_roc(X, y, folds=8,
-                iterations=options.iterations, random_state=options.random_seed,
-                n_jobs=options.parallel_threads)
+                iterations=options.iterations, min_samples_leaf=options.msl,
+                random_state=options.random_seed, n_jobs=options.parallel_threads)
 
         # save preds
         if options.save_preds:
             np.save('%s/preds.npy' % options.out_dir, preds)
 
         # save full model
-        model = randfor_full(X, y)
+        model = randfor_full(X, y, min_samples_leaf=options.msl)
         joblib.dump(model, '%s/model.pkl' % options.out_dir)
 
     # save
@@ -169,16 +191,17 @@ def plot_roc(fprs, tprs, out_dir):
     plt.close()
 
 
-def randfor_full(X, y, random_state=None, n_jobs=1):
+def randfor_full(X, y, min_samples_leaf=1, random_state=None, n_jobs=1):
     """Compute a single random forest on the full data."""
     model = RandomForestClassifier(n_estimators=100, max_features='log2', max_depth=64,
-                                   min_samples_leaf=1, min_samples_split=2,
+                                   min_samples_leaf=min_samples_leaf, min_samples_split=2,
                                    random_state=random_state, n_jobs=n_jobs)
     model.fit(X, y)
     return model
 
 
-def randfor_roc(X, y, folds=8, iterations=1, random_state=None, n_jobs=1):
+def randfor_roc(X, y, folds=8, iterations=1, 
+    min_samples_leaf=1, random_state=None, n_jobs=1):
     """Compute ROC using a random forest."""
     aurocs = []
     fpr_folds = []
@@ -203,7 +226,7 @@ def randfor_roc(X, y, folds=8, iterations=1, random_state=None, n_jobs=1):
             else:
                 rs_rf = rs_iter+test_index[0]
             model = RandomForestClassifier(n_estimators=100, max_features='log2', max_depth=64,
-                                           min_samples_leaf=1, min_samples_split=2,
+                                           min_samples_leaf=min_samples_leaf, min_samples_split=2,
                                            random_state=rs_rf, n_jobs=n_jobs)
             model.fit(X[train_index,:], y[train_index])
 
@@ -236,6 +259,17 @@ def randfor_roc(X, y, folds=8, iterations=1, random_state=None, n_jobs=1):
 
     return aurocs, fpr_folds, tpr_folds, fpr_mean, tpr_mean, preds_return
 
+def read_indel(sad_file, indel_abs=True, indel_bool=False):
+    with h5py.File(sad_file, 'r') as sad_open:
+        ref_alleles = [ra.decode('UTF-8') for ra in sad_open['ref_allele']]
+        alt_alleles = [aa.decode('UTF-8') for aa in sad_open['alt_allele']]
+    num_variants = len(ref_alleles)
+    indels = np.array([len(ref_alleles[vi])-len(alt_alleles[vi]) for vi in range(num_variants)])
+    if indel_abs:
+        indels = np.abs(indels)
+    if indel_bool:
+        indels = (indels != 0)
+    return indels
 
 def read_sad(sad_file, sad_stat):
     with h5py.File(sad_file, 'r') as sad_open:

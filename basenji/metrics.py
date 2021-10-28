@@ -4,10 +4,69 @@ import pdb
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.keras import backend as K
+from tensorflow.python.keras.utils import losses_utils
+from tensorflow.python.keras.losses import LossFunctionWrapper
 from tensorflow.python.keras.utils import metrics_utils
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
 
+################################################################################
+# Losses
+################################################################################
+# def MeanSquaredErrorSpecificity(y_true, y_pred, spec_weight=1):
+#   mse_term = tf.keras.losses.mean_squared_error(y_pred, y_true)
+
+#   yn_true = y_true - tf.math.reduce_mean(y_true, axis=-1, keepdims=True)
+#   yn_pred = y_pred - tf.math.reduce_mean(y_pred, axis=-1, keepdims=True)
+#   spec_term = tf.keras.losses.mean_squared_error(yn_pred, yn_true)
+
+#   return mse_term + spec_weight*spec_term
+
+def mean_squared_error_udot(y_true, y_pred, udot_weight=1):
+  mse_term = tf.keras.losses.mean_squared_error(y_true, y_pred)
+
+  yn_true = y_true - tf.math.reduce_mean(y_true, axis=-1, keepdims=True)
+  yn_pred = y_pred - tf.math.reduce_mean(y_pred, axis=-1, keepdims=True)
+  udot_term = -math_ops.reduce_mean(yn_true * yn_pred, axis=-1)
+
+  return mse_term + udot_weight*udot_term
+
+class MeanSquaredErrorUDot(LossFunctionWrapper):
+  def __init__(self, udot_weight=1, reduction=losses_utils.ReductionV2.AUTO, name='mse_udot'):
+    self.udot_weight = udot_weight
+    mse_udot = lambda yt, yp: mean_squared_error_udot(yt, yp, self.udot_weight)
+    super(MeanSquaredErrorUDot, self).__init__(
+        mse_udot, name=name, reduction=reduction)
+
+
+def poisson_kl(y_true, y_pred, kl_weight=1, epsilon=1e-3):
+  # poisson loss
+  poisson_term = tf.keras.losses.poisson(y_true, y_pred)
+
+  # add epsilon to protect against all tiny values
+  y_true += epsilon
+  y_pred += epsilon
+
+  # normalize to sum to one
+  yn_true = y_true / tf.math.reduce_sum(y_true, axis=-1, keepdims=True)
+  yn_pred = y_pred / tf.math.reduce_sum(y_pred, axis=-1, keepdims=True)
+
+  # kl term
+  kl_term = tf.keras.losses.kl_divergence(yn_true, yn_pred)
+
+  # weighted combination
+  return poisson_term + kl_weight*kl_term
+
+class PoissonKL(LossFunctionWrapper):
+  def __init__(self, kl_weight=1, reduction=losses_utils.ReductionV2.AUTO, name='poisson_kl'):
+    self.kl_weight = kl_weight
+    pois_kl = lambda yt, yp: poisson_kl(yt, yp, self.kl_weight)
+    super(PoissonKL, self).__init__(
+        pois_kl, name=name, reduction=reduction)
+
+################################################################################
+# Metrics
+################################################################################
 class SeqAUC(tf.keras.metrics.AUC):
   def __init__(self, curve='ROC', name=None, summarize=True, **kwargs):
     if name is None:
@@ -17,7 +76,7 @@ class SeqAUC(tf.keras.metrics.AUC):
         name = 'auprc'
     super(SeqAUC, self).__init__(curve=curve, name=name, multi_label=True, **kwargs)
     self._summarize = summarize
-
+    
 
   def update_state(self, y_true, y_pred, **kwargs):
     """Flatten sequence length before update."""
@@ -154,23 +213,28 @@ class PearsonR(tf.keras.metrics.Metric):
     y_true = tf.cast(y_true, 'float32')
     y_pred = tf.cast(y_pred, 'float32')
 
-    product = tf.reduce_sum(tf.multiply(y_true, y_pred), axis=[0,1])
+    if len(y_true.shape) == 2:
+      reduce_axes = 0
+    else:
+      reduce_axes = [0,1]
+
+    product = tf.reduce_sum(tf.multiply(y_true, y_pred), axis=reduce_axes)
     self._product.assign_add(product)
 
-    true_sum = tf.reduce_sum(y_true, axis=[0,1])
+    true_sum = tf.reduce_sum(y_true, axis=reduce_axes)
     self._true_sum.assign_add(true_sum)
 
-    true_sumsq = tf.reduce_sum(tf.math.square(y_true), axis=[0,1])
+    true_sumsq = tf.reduce_sum(tf.math.square(y_true), axis=reduce_axes)
     self._true_sumsq.assign_add(true_sumsq)
 
-    pred_sum = tf.reduce_sum(y_pred, axis=[0,1])
+    pred_sum = tf.reduce_sum(y_pred, axis=reduce_axes)
     self._pred_sum.assign_add(pred_sum)
 
-    pred_sumsq = tf.reduce_sum(tf.math.square(y_pred), axis=[0,1])
+    pred_sumsq = tf.reduce_sum(tf.math.square(y_pred), axis=reduce_axes)
     self._pred_sumsq.assign_add(pred_sumsq)
 
     count = tf.ones_like(y_true)
-    count = tf.reduce_sum(count, axis=[0,1])
+    count = tf.reduce_sum(count, axis=reduce_axes)
     self._count.assign_add(count)
 
   def result(self):
@@ -187,6 +251,10 @@ class PearsonR(tf.keras.metrics.Metric):
 
     true_var = self._true_sumsq - tf.multiply(self._count, true_mean2)
     pred_var = self._pred_sumsq - tf.multiply(self._count, pred_mean2)
+    pred_var = tf.where(tf.greater(pred_var, 1e-12),
+                        pred_var,
+                        np.inf*tf.ones_like(pred_var))
+    
     tp_var = tf.multiply(tf.math.sqrt(true_var), tf.math.sqrt(pred_var))
     correlation = tf.divide(covariance, tp_var)
 
@@ -216,20 +284,25 @@ class R2(tf.keras.metrics.Metric):
     y_true = tf.cast(y_true, 'float32')
     y_pred = tf.cast(y_pred, 'float32')
 
-    true_sum = tf.reduce_sum(y_true, axis=[0,1])
+    if len(y_true.shape) == 2:
+      reduce_axes = 0
+    else:
+      reduce_axes = [0,1]
+
+    true_sum = tf.reduce_sum(y_true, axis=reduce_axes)
     self._true_sum.assign_add(true_sum)
 
-    true_sumsq = tf.reduce_sum(tf.math.square(y_true), axis=[0,1])
+    true_sumsq = tf.reduce_sum(tf.math.square(y_true), axis=reduce_axes)
     self._true_sumsq.assign_add(true_sumsq)
 
-    product = tf.reduce_sum(tf.multiply(y_true, y_pred), axis=[0,1])
+    product = tf.reduce_sum(tf.multiply(y_true, y_pred), axis=reduce_axes)
     self._product.assign_add(product)
 
-    pred_sumsq = tf.reduce_sum(tf.math.square(y_pred), axis=[0,1])
+    pred_sumsq = tf.reduce_sum(tf.math.square(y_pred), axis=reduce_axes)
     self._pred_sumsq.assign_add(pred_sumsq)
 
     count = tf.ones_like(y_true)
-    count = tf.reduce_sum(count, axis=[0,1])
+    count = tf.reduce_sum(count, axis=reduce_axes)
     self._count.assign_add(count)
 
   def result(self):

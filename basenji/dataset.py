@@ -30,32 +30,9 @@ TFR_OUTPUT = 'target'
 def file_to_records(filename):
   return tf.data.TFRecordDataset(filename, compression_type='ZLIB')
 
-
-# class SeqDataset:
-#   def __init__(self, tfr_pattern, seq_length, seq_depth=4, seq_length_crop=None,
-#                target_length=None, num_targets=None, batch_size=1,
-#                mode=tf.estimator.ModeKeys.EVAL, compute_stats=True):
-#     """Initialize basic parameters; run compute_stats; run make_dataset."""
-
-#     self.tfr_pattern = tfr_pattern
-
-#     self.num_seqs = None
-#     self.batch_size = batch_size
-#     self.seq_length = seq_length
-#     self.seq_length_crop = seq_length_crop
-#     self.seq_depth = seq_depth
-#     self.target_length = target_length
-#     self.num_targets = num_targets
-
-#     self.mode = mode
-
-#     if compute_stats:
-#       self.compute_stats()
-#     self.make_dataset()
-
 class SeqDataset:
-  def __init__(self, data_dir, split_label, batch_size, shuffle_buffer=32,
-               seq_length_crop=None, mode=tf.estimator.ModeKeys.EVAL, tfr_pattern=None):
+  def __init__(self, data_dir, split_label, batch_size, shuffle_buffer=128,
+               seq_length_crop=None, mode='eval', tfr_pattern=None):
     """Initialize basic parameters; run compute_stats; run make_dataset."""
 
     self.data_dir = data_dir
@@ -87,6 +64,9 @@ class SeqDataset:
 
   def batches_per_epoch(self):
     return self.num_seqs // self.batch_size
+
+  def distribute(self, strategy):
+    self.dataset = strategy.experimental_distribute_dataset(self.dataset)
 
   def generate_parser(self, raw=False):
     def parse_proto(example_protos):
@@ -126,14 +106,14 @@ class SeqDataset:
     # initialize dataset from TFRecords glob
     tfr_files = natsorted(glob.glob(self.tfr_path))
     if tfr_files:
-      dataset = tf.data.Dataset.from_tensor_slices(tfr_files) 
-      #dataset = tf.data.Dataset.list_files(tf.constant(tfr_files), shuffle=False)
+      # dataset = tf.data.Dataset.list_files(tf.constant(tfr_files), shuffle=False)
+      dataset = tf.data.Dataset.from_tensor_slices(tfr_files)
     else:
       print('Cannot order TFRecords %s' % self.tfr_path, file=sys.stderr)
       dataset = tf.data.Dataset.list_files(self.tfr_path)
 
     # train
-    if self.mode == tf.estimator.ModeKeys.TRAIN:
+    if self.mode == 'train':
       # repeat
       dataset = dataset.repeat()
 
@@ -157,8 +137,14 @@ class SeqDataset:
     #  dataset = dataset.map(self.generate_parser())
     dataset = dataset.map(self.generate_parser())
 
+    # cache (runs OOM)
+    # dataset = dataset.cache()
+
     # batch
     dataset = dataset.batch(self.batch_size)
+
+    # prefetch
+    dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
 
     # hold on
     self.dataset = dataset
@@ -208,14 +194,14 @@ class SeqDataset:
       print('%s has %d sequences with 0 targets' % (self.tfr_path, self.num_seqs), flush=True)
 
 
-  def numpy(self, return_inputs=True, return_outputs=True, step=1):
+  def numpy(self, return_inputs=True, return_outputs=True, step=1, dtype='float16'):
     """ Convert TFR inputs and/or outputs to numpy arrays."""
     with tf.name_scope('numpy'):
       # initialize dataset from TFRecords glob
       tfr_files = natsorted(glob.glob(self.tfr_path))
       if tfr_files:
-        dataset = tf.data.Dataset.from_tensor_slices(tfr_files) 
-        #dataset = tf.data.Dataset.list_files(tf.constant(tfr_files), shuffle=False)
+        # dataset = tf.data.Dataset.list_files(tf.constant(tfr_files), shuffle=False)
+        dataset = tf.data.Dataset.from_tensor_slices(tfr_files)
       else:
         print('Cannot order TFRecords %s' % self.tfr_path, file=sys.stderr)
         dataset = tf.data.Dataset.list_files(self.tfr_path)
@@ -241,7 +227,8 @@ class SeqDataset:
 
       # targets
       if return_outputs:
-        targets1 = targets_raw.numpy().reshape((self.target_length,-1))
+        targets1 = targets_raw.numpy().astype(dtype)
+        targets1 = np.reshape(targets1, (self.target_length,-1))
         if step > 1:
           step_i = np.arange(0, self.target_length, step)
           targets1 = targets1[step_i,:]
@@ -249,7 +236,7 @@ class SeqDataset:
 
     # make arrays
     seqs_1hot = np.array(seqs_1hot)
-    targets = np.array(targets)
+    targets = np.array(targets, dtype=dtype)
 
     # return
     if return_inputs and return_outputs:

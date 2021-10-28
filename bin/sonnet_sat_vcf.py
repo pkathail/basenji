@@ -41,7 +41,7 @@ from basenji import vcf
 from basenji_sat_bed import ScoreWorker, satmut_gen
 
 '''
-basenji_sat_vcf.py
+sonnet_sat_vcf.py
 
 Perform an in silico saturated mutagenesis of the sequences surrounding variants
 given in a VCF file.
@@ -51,7 +51,7 @@ given in a VCF file.
 # main
 ################################################################################
 def main():
-  usage = 'usage: %prog [options] <params_file> <model_file> <vcf_file>'
+  usage = 'usage: %prog [options] <model> <vcf_file>'
   parser = OptionParser(usage)
   parser.add_option('-d', dest='mut_down',
       default=0, type='int',
@@ -77,6 +77,8 @@ def main():
   parser.add_option('--shifts', dest='shifts',
       default='0',
       help='Ensemble prediction shifts [Default: %default]')
+  parser.add_option('--species', dest='species',
+      default='human')
   parser.add_option('--stats', dest='sad_stats',
       default='sum',
       help='Comma-separated list of stats to save. [Default: %default]')
@@ -88,12 +90,11 @@ def main():
       help='Nucleotides upstream of center sequence to mutate [Default: %default]')
   (options, args) = parser.parse_args()
 
-  if len(args) != 3:
-    parser.error('Must provide parameters and model files and VCF')
+  if len(args) != 2:
+    parser.error('Must provide model and VCF')
   else:
-    params_file = args[0]
-    model_file = args[1]
-    vcf_file = args[2]
+    model_file = args[0]
+    vcf_file = args[1]
 
   if not os.path.isdir(options.out_dir):
     os.mkdir(options.out_dir)
@@ -111,12 +112,6 @@ def main():
   #################################################################
   # read parameters and targets
 
-  # read model parameters
-  with open(params_file) as params_open:
-    params = json.load(params_open)
-  params_model = params['model']
-  params_train = params['train']
-
   # read targets
   if options.targets_file is None:
     target_slice = None
@@ -127,12 +122,14 @@ def main():
   #################################################################
   # setup model
 
-  seqnn_model = seqnn.SeqNN(params_model)
-  seqnn_model.restore(model_file)
-  seqnn_model.build_slice(target_slice)
-  seqnn_model.build_ensemble(options.rc, options.shifts)
+  seqnn_model = tf.saved_model.load(model_file).model
 
-  num_targets = seqnn_model.num_targets()
+  # query num model targets 
+  seq_length = seqnn_model.predict_on_batch.input_signature[0].shape[1]
+  null_1hot = np.zeros((1,seq_length,4))
+  null_preds = seqnn_model.predict_on_batch(null_1hot)
+  null_preds = null_preds[options.species].numpy()
+  _, preds_length, num_targets = null_preds.shape
 
   #################################################################
   # SNP sequence dataset
@@ -143,15 +140,15 @@ def main():
   # get one hot coded input sequences
   if not options.genome2_fasta:
     seqs_1hot, seq_headers, snps, seqs_dna = vcf.snps_seq1(
-        snps, params_model['seq_length'], options.genome1_fasta, return_seqs=True)
+        snps, seq_length, options.genome1_fasta, return_seqs=True)
   else:
     seqs_1hot, seq_headers, snps, seqs_dna = vcf.snps2_seq1(
-        snps, params_model['seq_length'], options.genome1_fasta,
+        snps, seq_length, options.genome1_fasta,
         options.genome2_fasta, return_seqs=True)
   num_seqs = seqs_1hot.shape[0]
 
   # determine mutation region limits
-  seq_mid = params_model['seq_length'] // 2
+  seq_mid = seq_length // 2
   mut_start = seq_mid - options.mut_up
   mut_end = mut_start + options.mut_len
 
@@ -187,7 +184,6 @@ def main():
   # predict scores and write output
 
   # find center
-  preds_length = seqnn_model.target_lengths[0]
   center_start = preds_length // 2
   if preds_length % 2 == 0:
     center_end = center_start + 2
@@ -195,7 +191,8 @@ def main():
     center_end = center_start + 1
 
   # initialize predictions stream
-  preds_stream = stream.PredStreamGen(seqnn_model, seqs_gen, params_train['batch_size'])
+  preds_stream = stream.PredStreamSonnet(seqnn_model, seqs_gen,
+    rc=options.rc, shifts=options.shifts, species=options.species)
 
   # predictions index
   pi = 0

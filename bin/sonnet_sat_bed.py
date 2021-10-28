@@ -40,9 +40,10 @@ from basenji import bed
 from basenji import dna_io
 from basenji import seqnn
 from basenji import stream
+from basenji_sat_bed import satmut_gen, ScoreWorker
 
 '''
-basenji_sat_bed.py
+sonnet_sat_bed.py
 
 Perform an in silico saturation mutagenesis of sequences in a BED file.
 '''
@@ -51,7 +52,7 @@ Perform an in silico saturation mutagenesis of sequences in a BED file.
 # main
 ################################################################################
 def main():
-  usage = 'usage: %prog [options] <params_file> <model_file> <bed_file>'
+  usage = 'usage: %prog [options] <model> <bed_file>'
   parser = OptionParser(usage)
   parser.add_option('-d', dest='mut_down',
       default=0, type='int',
@@ -76,9 +77,11 @@ def main():
   parser.add_option('--shifts', dest='shifts',
       default='0',
       help='Ensemble prediction shifts [Default: %default]')
+  parser.add_option('--species', dest='species',
+      default='human')
   parser.add_option('--stats', dest='sad_stats',
       default='sum',
-      help='Comma-separated list of stats to save. [Default: %default]')
+      help='Comma-separated list of stats to save (sum/center/scd). [Default: %default]')
   parser.add_option('-t', dest='targets_file',
       default=None, type='str',
       help='File specifying target indexes and labels in table format')
@@ -87,31 +90,28 @@ def main():
       help='Nucleotides upstream of center sequence to mutate [Default: %default]')
   (options, args) = parser.parse_args()
 
-  if len(args) == 3:
+  if len(args) == 2:
     # single worker
-    params_file = args[0]
-    model_file = args[1]
-    bed_file = args[2]
+    model_file = args[0]
+    bed_file = args[1]
 
-  elif len(args) == 4:
+  elif len(args) == 3:
     # master script
     options_pkl_file = args[0]
-    params_file = args[1]
-    model_file = args[2]
-    bed_file = args[3]
+    model_file = args[1]
+    bed_file = args[2]
 
     # load options
     options_pkl = open(options_pkl_file, 'rb')
     options = pickle.load(options_pkl)
     options_pkl.close()
 
-  elif len(args) == 5:
+  elif len(args) == 4:
     # multi worker
     options_pkl_file = args[0]
-    params_file = args[1]
-    model_file = args[2]
-    bed_file = args[3]
-    worker_index = int(args[4])
+    model_file = args[1]
+    bed_file = args[2]
+    worker_index = int(args[3])
 
     # load options
     options_pkl = open(options_pkl_file, 'rb')
@@ -137,15 +137,6 @@ def main():
     options.mut_up = options.mut_len // 2
     options.mut_down = options.mut_len - options.mut_up
 
-  #################################################################
-  # read parameters and targets
-
-  # read model parameters
-  with open(params_file) as params_open:
-    params = json.load(params_open)
-  params_model = params['model']
-  params_train = params['train']
-
   # read targets
   if options.targets_file is None:
     target_slice = None
@@ -156,19 +147,21 @@ def main():
   #################################################################
   # setup model
 
-  seqnn_model = seqnn.SeqNN(params_model)
-  seqnn_model.restore(model_file)
-  seqnn_model.build_slice(target_slice)
-  seqnn_model.build_ensemble(options.rc, options.shifts)
+  seqnn_model = tf.saved_model.load(model_file).model
 
-  num_targets = seqnn_model.num_targets()
+  # query num model targets 
+  seq_length = seqnn_model.predict_on_batch.input_signature[0].shape[1]
+  null_1hot = np.zeros((1,seq_length,4))
+  null_preds = seqnn_model.predict_on_batch(null_1hot)
+  null_preds = null_preds[options.species].numpy()
+  _, preds_length, num_targets = null_preds.shape
 
   #################################################################
   # sequence dataset
 
   # read sequences from BED
   seqs_dna, seqs_coords = bed.make_bed_seqs(
-    bed_file, options.genome_fasta, params_model['seq_length'], stranded=True)
+    bed_file, options.genome_fasta, seq_length, stranded=True)
 
   # filter for worker SNPs
   if options.processes is not None:
@@ -179,7 +172,7 @@ def main():
   num_seqs = len(seqs_dna)
 
   # determine mutation region limits
-  seq_mid = params_model['seq_length'] // 2
+  seq_mid = seq_length // 2
   mut_start = seq_mid - options.mut_up
   mut_end = mut_start + options.mut_len
 
@@ -198,19 +191,6 @@ def main():
   for sad_stat in options.sad_stats:
     scores_h5.create_dataset(sad_stat, dtype='float16',
         shape=(num_seqs, options.mut_len, 4, num_targets))
-
-  # store mutagenesis sequence coordinates
-  """
-  seqs_chr, seqs_start, _, seqs_strand = zip(*seqs_coords)
-  seqs_chr = np.array(seqs_chr, dtype='S')
-  seqs_start = np.array(seqs_start) + mut_start
-  seqs_end = seqs_start + options.mut_len
-  seqs_strand = np.array(seqs_strand, dtype='S')
-  scores_h5.create_dataset('chrom', data=seqs_chr)
-  scores_h5.create_dataset('start', data=seqs_start)
-  scores_h5.create_dataset('end', data=seqs_end)
-  scores_h5.create_dataset('strand', data=seqs_strand)
-  """
 
   # store mutagenesis sequence coordinates
   scores_chr = []
@@ -248,7 +228,6 @@ def main():
   # predict scores, write output
 
   # find center
-  preds_length = seqnn_model.target_lengths[0]
   center_start = preds_length // 2
   if preds_length % 2 == 0:
     center_end = center_start + 2
@@ -256,7 +235,8 @@ def main():
     center_end = center_start + 1
 
   # initialize predictions stream
-  preds_stream = stream.PredStreamGen(seqnn_model, seqs_gen, params_train['batch_size'])
+  preds_stream = stream.PredStreamSonnet(seqnn_model, seqs_gen,
+    rc=options.rc, shifts=options.shifts, species=options.species)
 
   # predictions index
   pi = 0
@@ -303,121 +283,6 @@ def main():
 
   # close output HDF5
   scores_h5.close()
-
-
-def satmut_gen(seqs_dna, mut_start, mut_end):
-  """Construct generator for 1 hot encoded saturation
-     mutagenesis DNA sequences."""
-
-  for seq_dna in seqs_dna:
-    # 1 hot code DNA
-    seq_1hot = dna_io.dna_1hot(seq_dna)
-    yield seq_1hot
-
-    # for mutation positions
-    for mi in range(mut_start, mut_end):
-      # for each nucleotide
-      for ni in range(4):
-        # if non-reference
-        if seq_1hot[mi,ni] == 0:
-          # copy and modify
-          seq_mut_1hot = np.copy(seq_1hot)
-          seq_mut_1hot[mi,:] = 0
-          seq_mut_1hot[mi,ni] = 1
-          yield seq_mut_1hot
-
-
-class PlotWorker(Thread):
-  """Compute summary statistics and write to HDF."""
-  def __init__(self, plot_queue, out_dir):
-    Thread.__init__(self)
-    self.queue = plot_queue
-    self.daemon = True
-    self.out_dir = out_dir
-
-  def run(self):
-    while True:
-      # unload predictions
-      seq_dna, seq_preds, si = self.queue.get()
-      print('Plotting %d' % si, flush=True)
-
-      # communicate finished task
-      self.queue.task_done()
-
-
-class ScoreWorker(Thread):
-  """Compute summary statistics and write to HDF."""
-  def __init__(self, score_queue, scores_h5, sad_stats, mut_start, mut_end):
-    Thread.__init__(self)
-    self.queue = score_queue
-    self.daemon = True
-    self.scores_h5 = scores_h5
-    self.sad_stats = sad_stats
-    self.mut_start = mut_start
-    self.mut_end = mut_end
-
-  def run(self):
-    while True:
-      try:
-        # unload predictions
-        seq_dna, seq_pred_stats, si = self.queue.get()
-        seq_preds_sum, seq_preds_center, seq_preds_scd = seq_pred_stats
-        print('Writing %d' % si, flush=True)
-
-        # seq_preds_sum is (1 + 3*mut_len) x (num_targets)
-        num_preds, num_targets = seq_preds_sum.shape
-        mut_len = self.mut_end - self.mut_start
-
-        # one hot code mutagenized DNA
-        seq_dna_mut = seq_dna[self.mut_start:self.mut_end]
-        seq_1hot_mut = dna_io.dna_1hot(seq_dna_mut)
-
-        # write to HDF5
-        self.scores_h5['seqs'][si,:,:] = seq_1hot_mut
-
-        for sad_stat in self.sad_stats:
-          # initialize scores
-          seq_scores = np.zeros((mut_len, 4, num_targets), dtype='float32')
-
-          # summary stat
-          if sad_stat == 'sum':
-            seq_preds_stat = seq_preds_sum
-          elif sad_stat == 'center':
-            seq_preds_stat = seq_preds_center
-          elif sad_stat == 'scd':
-            seq_preds_stat = seq_preds_scd
-          else:
-            print('Unrecognized summary statistic "%s"' % options.sad_stat)
-            exit(1)
-
-          # predictions index (starting at first mutagenesis)
-          pi = 1
-
-          # for each mutated position
-          for mi in range(mut_len):
-            # for each nucleotide
-            for ni in range(4):
-              if seq_1hot_mut[mi,ni]:
-                # reference score
-                seq_scores[mi,ni,:] = seq_preds_stat[0,:]
-              else:
-                # mutation score
-                seq_scores[mi,ni,:] = seq_preds_stat[pi,:]
-                pi += 1
-
-          # normalize positions
-          if sad_stat != 'sqdiff':
-            seq_scores -= seq_scores.mean(axis=1, keepdims=True)
-
-          # write to HDF5
-          self.scores_h5[sad_stat][si,:,:,:] = seq_scores.astype('float16')
-
-      except:
-        # communicate error
-        print('ERROR: Sequence %d failed' % si, file=sys.stderr, flush=True)
-
-      # communicate finished task
-      self.queue.task_done()
 
 
 ################################################################################

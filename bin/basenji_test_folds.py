@@ -17,6 +17,7 @@ from optparse import OptionParser, OptionGroup
 import glob
 import json
 import os
+import pdb
 import shutil
 import sys
 
@@ -39,24 +40,37 @@ Train Basenji model replicates using given parameters and data.
 # main
 ################################################################################
 def main():
-  usage = 'usage: %prog [options] <exp_dir> <params_file> <data_dir>'
+  usage = 'usage: %prog [options] <exp_dir> <params_file> <data1_dir> ...'
   parser = OptionParser(usage)
   parser.add_option('-a', '--alt', dest='alternative',
       default='two-sided', help='Statistical test alternative [Default: %default]')
   parser.add_option('-c', dest='crosses',
       default=1, type='int',
       help='Number of cross-fold rounds [Default:%default]')
+  parser.add_option('-d', dest='dataset_i',
+      default=None, type='int',
+      help='Dataset index [Default:%default]')
+  parser.add_option('--d_ref', dest='dataset_ref_i',
+      default=None, type='int',
+      help='Reference Dataset index [Default:%default]')
   parser.add_option('-e', dest='conda_env',
-      default='tf2-gpu',
+      default='tf2.4',
       help='Anaconda environment [Default: %default]')
-  parser.add_option('--l1', dest='label1',
-      default='Reference', help='Reference label [Default: %default]')
-  parser.add_option('--l2', dest='label2',
+  parser.add_option('-f', dest='fold_subset',
+      default=None, type='int',
+      help='Run a subset of folds [Default:%default]')
+  parser.add_option('--label_exp', dest='label_exp',
       default='Experiment', help='Experiment label [Default: %default]')
+  parser.add_option('--label_ref', dest='label_ref',
+      default='Reference', help='Reference label [Default: %default]')
+  parser.add_option('-m', dest='metric',
+  	  default=None, help='Train/test metric [Default: Pearsonr or AUPRC]')
   parser.add_option('--name', dest='name',
       default='test', help='SLURM name prefix [Default: %default]')
-  parser.add_option('-o', dest='out_stem',
-      default=None, help='Outplut plot stem [Default: %default]')
+  parser.add_option('-o', dest='exp_dir',
+      default=None, help='Output experiment directory [Default: %default]')
+  parser.add_option('-p', dest='out_stem',
+      default=None, help='Output plot stem [Default: %default]')
   parser.add_option('-q', dest='queue',
       default='gtx1080ti')
   parser.add_option('-r', dest='ref_dir',
@@ -70,25 +84,48 @@ def main():
   parser.add_option('--spec', dest='specificity',
       default=False, action='store_true',
       help='Test specificity [Default: %default]')
+  parser.add_option('--spec_step', dest='spec_step',
+      default=1, type='int',
+      help='Positional step for specificity predict [Default: %default]')
   parser.add_option('--train', dest='train',
       default=False, action='store_true',
       help='Test on the training set, too [Default: %default]')
   (options, args) = parser.parse_args()
 
-  if len(args) != 3:
+  if len(args) < 2:
     parser.error('Must provide parameters file and data directory')
   else:
-    exp_dir = args[0]
-    params_file = args[1]
-    data_dir = args[2]
+    params_file = args[0]
+    data_dirs = [os.path.abspath(arg) for arg in args[1:]]
 
-   # read data parameters
-  data_stats_file = '%s/statistics.json' % data_dir
+  # using -o for required argument for compatibility with the training script
+  assert(options.exp_dir is not None)
+
+  # read data parameters
+  data_stats_file = '%s/statistics.json' % data_dirs[0]
   with open(data_stats_file) as data_stats_open:
     data_stats = json.load(data_stats_open)
 
+  if options.dataset_i is None:
+    head_i = 0
+  else:
+    head_i = options.dataset_i
+
   # count folds
   num_folds = len([dkey for dkey in data_stats if dkey.startswith('fold')])
+
+  # subset folds
+  if options.fold_subset is not None:
+    num_folds = min(options.fold_subset, num_folds)
+
+  if options.queue == 'standard':
+    num_cpu = 8
+    num_gpu = 0
+    time_base = 18
+  else:
+    num_cpu = 2
+    num_gpu = 1
+    time_base = 4
   
   ################################################################
   # test check
@@ -98,38 +135,45 @@ def main():
   if options.train:
     for ci in range(options.crosses):
       for fi in range(num_folds):
-        it_dir = '%s/f%d_c%d' % (exp_dir, fi, ci)
-        
-        # check if done
-        acc_file = '%s/test_train/acc.txt' % it_dir
-        if os.path.isfile(acc_file):
-          print('%s already generated.' % acc_file)
+        it_dir = '%s/f%d_c%d' % (options.exp_dir, fi, ci)
+
+        if options.dataset_i is None:
+          out_dir = '%s/test_train' % it_dir
+          model_file = '%s/train/model_check.h5' % it_dir
         else:
-          # basenji test
-          basenji_cmd = '. /home/drk/anaconda3/etc/profile.d/conda.sh;'
-          basenji_cmd += ' conda activate %s;' % options.conda_env
-          basenji_cmd += ' basenji_test.py'
-          basenji_cmd += ' -o %s/test_train' % it_dir
+          out_dir = '%s/test%d_train' % (it_dir, options.dataset_i)
+          model_file = '%s/train/model%d_check.h5' % (it_dir, options.dataset_i)
+      
+        # check if done
+        acc_file = '%s/acc.txt' % out_dir
+        if os.path.isfile(acc_file):
+          # print('%s already generated.' % acc_file)
+          pass
+        else:            
+          cmd = '. /home/drk/anaconda3/etc/profile.d/conda.sh;'
+          cmd += ' conda activate %s;' % options.conda_env
+          cmd += ' basenji_test.py'
+          cmd += ' --head %d' % head_i
+          cmd += ' -o %s' % out_dir
           if options.rc:
-            basenji_cmd += ' --rc'
+            cmd += ' --rc'
           if options.shifts:
-            basenji_cmd += ' --shifts %s' % options.shifts
-          basenji_cmd += ' --split train'
-          basenji_cmd += ' %s' % params_file
-          basenji_cmd += ' %s/train/model_check.h5' % it_dir
-          basenji_cmd += ' %s/data' % it_dir
+            cmd += ' --shifts %s' % options.shifts
+          cmd += ' --split train'
+          cmd += ' %s' % params_file
+          cmd += ' %s' % model_file
+          cmd += ' %s/data%d' % (it_dir, head_i)
 
           name = '%s-testtr-f%dc%d' % (options.name, fi, ci)
-          basenji_job = slurm.Job(basenji_cmd,
-                          name=name,
-                          out_file='%s/test_train.out'%it_dir,
-                          err_file='%s/test_train.err'%it_dir,
-                          queue=options.queue,
-                          cpu=1,
-                          gpu=1,
-                          mem=23000,
-                          time='4:00:00')
-          jobs.append(basenji_job)
+          j = slurm.Job(cmd,
+                        name=name,
+                        out_file='%s.out'%out_dir,
+                        err_file='%s.err'%out_dir,
+                        queue=options.queue,
+                        cpu=num_cpu, gpu=num_gpu,
+                        mem=23000,
+                        time='%d:00:00' % (2*time_base))
+          jobs.append(j)
 
 
   ################################################################
@@ -137,37 +181,45 @@ def main():
   ################################################################
   for ci in range(options.crosses):
     for fi in range(num_folds):
-      it_dir = '%s/f%d_c%d' % (exp_dir, fi, ci)
+      it_dir = '%s/f%d_c%d' % (options.exp_dir, fi, ci)
+
+      if options.dataset_i is None:
+        out_dir = '%s/test' % it_dir
+        model_file = '%s/train/model_best.h5' % it_dir
+      else:
+        out_dir = '%s/test%d' % (it_dir, options.dataset_i)
+        model_file = '%s/train/model%d_best.h5' % (it_dir, options.dataset_i)
 
       # check if done
-      acc_file = '%s/test/acc.txt' % it_dir
+      acc_file = '%s/acc.txt' % out_dir
       if os.path.isfile(acc_file):
-        print('%s already generated.' % acc_file)
+        # print('%s already generated.' % acc_file)
+        pass
       else:
         # basenji test
-        basenji_cmd = '. /home/drk/anaconda3/etc/profile.d/conda.sh;'
-        basenji_cmd += ' conda activate %s;' % options.conda_env
-        basenji_cmd += ' basenji_test.py'
-        basenji_cmd += ' -o %s/test' % it_dir
+        cmd = '. /home/drk/anaconda3/etc/profile.d/conda.sh;'
+        cmd += ' conda activate %s;' % options.conda_env
+        cmd += ' basenji_test.py'
+        cmd += ' --head %d' % head_i
+        cmd += ' -o %s' % out_dir
         if options.rc:
-          basenji_cmd += ' --rc'
+          cmd += ' --rc'
         if options.shifts:
-          basenji_cmd += ' --shifts %s' % options.shifts
-        basenji_cmd += ' %s' % params_file
-        basenji_cmd += ' %s/train/model_best.h5' % it_dir
-        basenji_cmd += ' %s/data' % it_dir
+          cmd += ' --shifts %s' % options.shifts
+        cmd += ' %s' % params_file
+        cmd += ' %s' % model_file
+        cmd += ' %s/data%d' % (it_dir, head_i)
 
         name = '%s-test-f%dc%d' % (options.name, fi, ci)
-        basenji_job = slurm.Job(basenji_cmd,
-                        name=name,
-                        out_file='%s/test.out'%it_dir,
-                        err_file='%s/test.err'%it_dir,
-                        queue=options.queue,
-                        cpu=1,
-                        gpu=1,
-                        mem=23000,
-                        time='4:00:00')
-        jobs.append(basenji_job)
+        j = slurm.Job(cmd,
+                      name=name,
+                      out_file='%s.out'%out_dir,
+                      err_file='%s.err'%out_dir,
+                      queue=options.queue,
+                      cpu=num_cpu, gpu=num_gpu,
+                      mem=23000,
+                      time='%d:00:00' % time_base)
+        jobs.append(j)
 
   ################################################################
   # test best specificity
@@ -175,111 +227,143 @@ def main():
   if options.specificity:
     for ci in range(options.crosses):
       for fi in range(num_folds):
-        it_dir = '%s/f%d_c%d' % (exp_dir, fi, ci)
+        it_dir = '%s/f%d_c%d' % (options.exp_dir, fi, ci)
+
+        if options.dataset_i is None:
+          out_dir = '%s/test_spec' % it_dir
+          model_file = '%s/train/model_best.h5' % it_dir
+        else:
+          out_dir = '%s/test%d_spec' % (it_dir, options.dataset_i)
+          model_file = '%s/train/model%d_best.h5' % (it_dir, options.dataset_i)
 
         # check if done
-        acc_file = '%s/test_spec/acc.txt' % it_dir
+        acc_file = '%s/acc.txt' % out_dir
         if os.path.isfile(acc_file):
-          print('%s already generated.' % acc_file)
+          # print('%s already generated.' % acc_file)
+          pass
         else:
           # basenji test
-          basenji_cmd = '. /home/drk/anaconda3/etc/profile.d/conda.sh;'
-          basenji_cmd += ' conda activate %s;' % options.conda_env
-          basenji_cmd += ' basenji_test_specificity.py'
-          basenji_cmd += ' -o %s/test_spec' % it_dir
+          cmd = '. /home/drk/anaconda3/etc/profile.d/conda.sh;'
+          cmd += ' conda activate %s;' % options.conda_env
+          cmd += ' basenji_test_specificity.py'
+          cmd += ' --head %d' % head_i
+          cmd += ' -o %s' % out_dir
+          cmd += ' -s %d' % options.spec_step
           if options.rc:
-            basenji_cmd += ' --rc'
+            cmd += ' --rc'
           if options.shifts:
-            basenji_cmd += ' --shifts %s' % options.shifts
-          basenji_cmd += ' %s' % params_file
-          basenji_cmd += ' %s/train/model_best.h5' % it_dir
-          basenji_cmd += ' %s/data' % it_dir
+            cmd += ' --shifts %s' % options.shifts
+          cmd += ' %s' % params_file
+          cmd += ' %s' % model_file
+          cmd += ' %s/data%d' % (it_dir, head_i)
 
           name = '%s-spec-f%dc%d' % (options.name, fi, ci)
-          basenji_job = slurm.Job(basenji_cmd,
+          j = slurm.Job(cmd,
                           name=name,
-                          out_file='%s/test_spec.out'%it_dir,
-                          err_file='%s/test_spec.err'%it_dir,
+                          out_file='%s.out'%out_dir,
+                          err_file='%s.err'%out_dir,
                           queue=options.queue,
-                          cpu=1,
-                          gpu=1,
-                          mem=60000,
-                          time='6:00:00')
-          jobs.append(basenji_job)
+                          cpu=num_cpu, gpu=num_gpu,
+                          mem=90000,
+                          time='%d:00:00' % (3*time_base))
+          jobs.append(j)
 
   slurm.multi_run(jobs, verbose=True)
 
 
-  if options.ref_dir is not None:
-    ################################################################
-    # compare checkpoint on training set
-    ################################################################
-    if options.train:
-      ref_glob_str = '%s/*/test_train/acc.txt' % options.ref_dir
-      ref_cors, ref_mean, ref_stdm = read_cors(ref_glob_str)
+  if options.dataset_i is None:
+    test_prefix = 'test'
+  else:
+    test_prefix = 'test%d' % options.dataset_i
 
-      exp_glob_str = '%s/*/test_train/acc.txt' % exp_dir
-      exp_cors, exp_mean, exp_stdm = read_cors(exp_glob_str)
+  if options.dataset_ref_i is None:
+    test_ref_prefix = 'test'
+  else:
+    test_ref_prefix = 'test%d' % options.dataset_ref_i
 
+  # classification or regression
+  if options.metric is None:
+	  with open('%s/f0_c0/%s/acc.txt' % (options.exp_dir,test_prefix)) as test0_open:
+	    header = test0_open.readline().split()
+	    if 'pearsonr' in header:
+	      options.metric = 'pearsonr'
+	    else:
+	      options.metric = 'auprc'
+
+  ################################################################
+  # compare checkpoint on training set
+  ################################################################
+  if options.train:
+    exp_glob_str = '%s/*/%s_train/acc.txt' % (options.exp_dir, test_prefix)
+    exp_cors, exp_mean, exp_stdm = read_metrics(exp_glob_str, options.metric)
+
+    if options.ref_dir is not None:
+      ref_glob_str = '%s/*/%s_train/acc.txt' % (options.ref_dir, test_ref_prefix)
+      ref_cors, ref_mean, ref_stdm = read_metrics(ref_glob_str, options.metric)
       mwp, tp = stat_tests(ref_cors, exp_cors, options.alternative)
 
-      print('\nTrain:')
-      print('%12s PearsonR: %.4f (%.4f)' % (options.label1, ref_mean, ref_stdm))
-      print('%12s PearsonR: %.4f (%.4f)' % (options.label2, exp_mean, exp_stdm))
+    print('\nTrain:')
+    print('%12s %s: %.4f (%.4f)' % (options.label_exp, options.metric, exp_mean, exp_stdm))
+    if options.ref_dir is not None:
+      print('%12s %s: %.4f (%.4f)' % (options.label_ref, options.metric, ref_mean, ref_stdm))
       print('Mann-Whitney U p-value: %.3g' % mwp)
       print('T-test p-value: %.3g' % tp)
 
       if options.out_stem is not None:
         jointplot(ref_cors, exp_cors,
           '%s_train.pdf' % options.out_stem,
-          options.label1, options.label2)
+          options.label_ref, options.label_exp)
 
 
-    ################################################################
-    # compare best on test set
-    ################################################################
-    ref_glob_str = '%s/*/test/acc.txt' % options.ref_dir
-    ref_cors, ref_mean, ref_stdm = read_cors(ref_glob_str)
+  ################################################################
+  # compare best on test set
+  ################################################################
+  exp_glob_str = '%s/*/%s/acc.txt' % (options.exp_dir, test_prefix)
+  exp_cors, exp_mean, exp_stdm = read_metrics(exp_glob_str, options.metric)
 
-    exp_glob_str = '%s/*/test/acc.txt' % exp_dir
-    exp_cors, exp_mean, exp_stdm = read_cors(exp_glob_str)
+  if options.ref_dir is not None:
+    ref_glob_str = '%s/*/%s/acc.txt' % (options.ref_dir, test_ref_prefix)
+    ref_cors, ref_mean, ref_stdm = read_metrics(ref_glob_str, options.metric)
 
     mwp, tp = stat_tests(ref_cors, exp_cors, options.alternative)
 
-    print('\nTest:')
-    print('%12s PearsonR: %.4f (%.4f)' % (options.label1, ref_mean, ref_stdm))
-    print('%12s PearsonR: %.4f (%.4f)' % (options.label2, exp_mean, exp_stdm))
+  print('\nTest:')
+  print('%12s %s: %.4f (%.4f)' % (options.label_exp, options.metric, exp_mean, exp_stdm))
+  if options.ref_dir is not None:
+    print('%12s %s: %.4f (%.4f)' % (options.label_ref, options.metric, ref_mean, ref_stdm))
     print('Mann-Whitney U p-value: %.3g' % mwp)
     print('T-test p-value: %.3g' % tp)
 
     if options.out_stem is not None:
       jointplot(ref_cors, exp_cors,
           '%s_test.pdf' % options.out_stem,
-          options.label1, options.label2)
+          options.label_ref, options.label_exp)
 
-    ################################################################
-    # compare best on test set specificity
-    ################################################################
-    if options.specificity:
-      ref_glob_str = '%s/*/test_spec/acc.txt' % options.ref_dir
-      ref_cors, ref_mean, ref_stdm = read_cors(ref_glob_str)
+  ################################################################
+  # compare best on test set specificity
+  ################################################################
+  if options.specificity:
+    exp_glob_str = '%s/*/%s_spec/acc.txt' % (options.exp_dir, test_prefix)
+    exp_cors, exp_mean, exp_stdm = read_metrics(exp_glob_str, options.metric)
 
-      exp_glob_str = '%s/*/test_spec/acc.txt' % exp_dir
-      exp_cors, exp_mean, exp_stdm = read_cors(exp_glob_str)
+    if options.ref_dir is not None:
+      ref_glob_str = '%s/*/%s_spec/acc.txt' % (options.ref_dir, test_ref_prefix)
+      ref_cors, ref_mean, ref_stdm = read_metrics(ref_glob_str, options.metric)
 
       mwp, tp = stat_tests(ref_cors, exp_cors, options.alternative)
 
-      print('\nSpecificity:')
-      print('%12s PearsonR: %.4f (%.4f)' % (options.label1, ref_mean, ref_stdm))
-      print('%12s PearsonR: %.4f (%.4f)' % (options.label2, exp_mean, exp_stdm))
+    print('\nSpecificity:')
+    print('%12s %s: %.4f (%.4f)' % (options.label_exp, options.metric, exp_mean, exp_stdm))    
+    if options.ref_dir is not None:
+      print('%12s %s: %.4f (%.4f)' % (options.label_ref, options.metric, ref_mean, ref_stdm))
       print('Mann-Whitney U p-value: %.3g' % mwp)
       print('T-test p-value: %.3g' % tp)
 
       if options.out_stem is not None:
         jointplot(ref_cors, exp_cors,
           '%s_spec.pdf' % options.out_stem,
-          options.label1, options.label2)
-    
+          options.label_ref, options.label_exp)
+
 
 def jointplot(ref_cors, exp_cors, out_pdf, label1, label2):
   vmin = min(np.min(ref_cors), np.min(exp_cors))
@@ -305,15 +389,17 @@ def jointplot(ref_cors, exp_cors, out_pdf, label1, label2):
   plt.savefig(out_pdf)
 
 
-def read_cors(acc_glob_str):
+def read_metrics(acc_glob_str, metric='pearsonr'):
   rep_cors = []
   acc_files = natsorted(glob.glob(acc_glob_str))
   for acc_file in acc_files:
     try:
+      # tf2 version
       acc_df = pd.read_csv(acc_file, sep='\t', index_col=0)
-      rep_cors.append(acc_df.pearsonr.mean())
+      rep_cors.append(acc_df.loc[:,metric].mean())
+
     except:
-      #read tf1 version
+      # tf1 version
       cors = []
       for line in open(acc_file):
         a = line.split()
@@ -327,16 +413,21 @@ def read_cors(acc_glob_str):
 
 
 def stat_tests(ref_cors, exp_cors, alternative):
-  _, mwp = wilcoxon(ref_cors, exp_cors, alternative=alternative)
-  tt, tp = ttest_rel(ref_cors, exp_cors)
+  # hack for the common situtation where I have more reference
+  # crosses than experiment crosses
+  if len(ref_cors) == 2*len(exp_cors):
+    ref_cors = [ref_cors[i] for i in range(len(ref_cors)) if i % 2 == 0]
+
+  _, mwp = wilcoxon(exp_cors, ref_cors, alternative=alternative)
+  tt, tp = ttest_rel(exp_cors, ref_cors)
 
   if alternative == 'less':
-    if tt > 0:
-      tp = 1 - (1-tp)/2
-    else:
-      tp /= 2
-  elif alternative == 'greater':
     if tt <= 0:
+      tp /= 2
+    else:
+      tp = 1 - (1-tp)/2
+  elif alternative == 'greater':
+    if tt >= 0:
       tp /= 2
     else:
       tp = 1 - (1-tp)/2

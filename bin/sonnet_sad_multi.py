@@ -15,7 +15,6 @@
 # =========================================================================
 
 from optparse import OptionParser
-
 import glob
 import os
 import pickle
@@ -29,9 +28,9 @@ import numpy as np
 import slurm
 
 """
-basenji_sat_bed_multi.py
+sonnet_sad_multi.py
 
-Perform an in silico saturation mutagenesis of sequences in a BED file,
+Compute SNP expression difference scores for variants in a VCF file,
 using multiple processes.
 """
 
@@ -39,68 +38,65 @@ using multiple processes.
 # main
 ################################################################################
 def main():
-  usage = 'usage: %prog [options] <params_file> <model_file> <bed_file>'
+  usage = 'usage: %prog [options] <model> <vcf_file>'
   parser = OptionParser(usage)
 
-  # basenji_sat_bed.py options
-  parser.add_option('-d', dest='mut_down',
-      default=0, type='int',
-      help='Nucleotides downstream of center sequence to mutate [Default: %default]')
+  # sad
+  parser.add_option('-b', dest='batch_size',
+      default=4, type='int',
+      help='Batch size [Default: %default]')
+  parser.add_option('-c', dest='slice_center',
+      default=None, type='int',
+      help='Slice center positions [Default: %default]')
   parser.add_option('-f', dest='genome_fasta',
-      default=None,
+      default='%s/data/hg19.fa' % os.environ['BASENJIDIR'],
       help='Genome FASTA for sequences [Default: %default]')
-  parser.add_option('-l', dest='mut_len',
-      default=200, type='int',
-      help='Length of center sequence to mutate [Default: %default]')
-  parser.add_option('-o', dest='out_dir',
-      default='sat_mut', help='Output directory [Default: %default]')
-  parser.add_option('--plots', dest='plots',
-      default=False, action='store_true',
-      help='Make heatmap plots [Default: %default]')
+  parser.add_option('-o',dest='out_dir',
+      default='sad',
+      help='Output directory for tables and plots [Default: %default]')
+  parser.add_option('--pseudo', dest='log_pseudo',
+      default=1, type='float',
+      help='Log2 pseudocount [Default: %default]')
   parser.add_option('--rc', dest='rc',
       default=False, action='store_true',
-      help='Ensemble forward and reverse complement predictions [Default: %default]')
+      help='Average forward and reverse complement predictions [Default: %default]')
   parser.add_option('--shifts', dest='shifts',
-      default='0',
+      default='0', type='str',
       help='Ensemble prediction shifts [Default: %default]')
+  parser.add_option('--species', dest='species',
+      default='human')
   parser.add_option('--stats', dest='sad_stats',
-      default='sum',
+      default='SAD',
       help='Comma-separated list of stats to save. [Default: %default]')
   parser.add_option('-t', dest='targets_file',
       default=None, type='str',
       help='File specifying target indexes and labels in table format')
-  parser.add_option('-u', dest='mut_up',
-      default=0, type='int',
-      help='Nucleotides upstream of center sequence to mutate [Default: %default]')
 
-  # _multi.py options
+  # multi
   parser.add_option('-e', dest='conda_env',
       default='tf2.4',
       help='Anaconda environment [Default: %default]')
+  parser.add_option('--name', dest='name',
+      default='sad', help='SLURM name prefix [Default: %default]')
   parser.add_option('--max_proc', dest='max_proc',
       default=None, type='int',
       help='Maximum concurrent processes [Default: %default]')
-  parser.add_option('-n', dest='name',
-      default='sat',
-      help='SLURM job name prefix [Default: %default]')
   parser.add_option('-p', dest='processes',
       default=None, type='int',
       help='Number of processes, passed by multi script')
   parser.add_option('-q', dest='queue',
-      default='k80',
+      default='gtx1080ti',
       help='SLURM queue on which to run the jobs [Default: %default]')
-  parser.add_option('-r', '--restart', dest='restart',
+  parser.add_option('-r', dest='restart',
       default=False, action='store_true',
       help='Restart a partially completed job [Default: %default]')
   (options, args) = parser.parse_args()
 
-  if len(args) != 3:
-    print(args)
-    parser.error('Must provide parameters and model files and BED file')
+  if len(args) != 2:
+    parser.error('Must provide model and VCF file')
   else:
-    params_file = args[0]
-    model_file = args[1]
-    bed_file = args[2]
+    model_file = args[0]
+    vcf_file = args[1]
 
   #######################################################
   # prep work
@@ -126,16 +122,17 @@ def main():
       cmd = '. /home/drk/anaconda3/etc/profile.d/conda.sh;'
       cmd += ' conda activate %s;' % options.conda_env
 
-      cmd += ' basenji_sat_bed.py %s %s %d' % (
+      cmd += ' sonnet_sad.py %s %s %d' % (
           options_pkl_file, ' '.join(args), pi)
+
       name = '%s_p%d' % (options.name, pi)
       outf = '%s/job%d.out' % (options.out_dir, pi)
       errf = '%s/job%d.err' % (options.out_dir, pi)
+
       j = slurm.Job(cmd, name,
-          outf, errf,
-          queue=options.queue,
-          cpu=2, gpu=1,
-          mem=30000, time='14-0:0:0')
+                    outf, errf,
+                    queue=options.queue, gpu=1,
+                    mem=22000, time='14-0:0:0')
       jobs.append(j)
 
   slurm.multi_run(jobs, max_proc=options.max_proc, verbose=True,
@@ -144,62 +141,80 @@ def main():
   #######################################################
   # collect output
 
-  sad_stat = options.sad_stats.split(',')[0]
-  collect_h5(options.out_dir, options.processes, sad_stat)
+  collect_h5('sad.h5', options.out_dir, options.processes)
 
   # for pi in range(options.processes):
   #     shutil.rmtree('%s/job%d' % (options.out_dir,pi))
 
 
-def collect_h5(out_dir, num_procs, sad_stat):
-  h5_file = 'scores.h5'
-
-  # count sequences
-  num_seqs = 0
+def collect_h5(file_name, out_dir, num_procs):
+  # count variants
+  num_variants = 0
   for pi in range(num_procs):
     # open job
-    job_h5_file = '%s/job%d/%s' % (out_dir, pi, h5_file)
+    job_h5_file = '%s/job%d/%s' % (out_dir, pi, file_name)
     job_h5_open = h5py.File(job_h5_file, 'r')
-    num_seqs += job_h5_open[sad_stat].shape[0]
-    seq_len = job_h5_open[sad_stat].shape[1]
-    num_targets = job_h5_open[sad_stat].shape[-1]
+    num_variants += len(job_h5_open['snp'])
     job_h5_open.close()
 
   # initialize final h5
-  final_h5_file = '%s/%s' % (out_dir, h5_file)
+  final_h5_file = '%s/%s' % (out_dir, file_name)
   final_h5_open = h5py.File(final_h5_file, 'w')
 
   # keep dict for string values
   final_strings = {}
 
-  job0_h5_file = '%s/job0/%s' % (out_dir, h5_file)
+  job0_h5_file = '%s/job0/%s' % (out_dir, file_name)
   job0_h5_open = h5py.File(job0_h5_file, 'r')
   for key in job0_h5_open.keys():
-    key_shape = list(job0_h5_open[key].shape)
-    key_shape[0] = num_seqs
-    key_shape = tuple(key_shape)
-    if job0_h5_open[key].dtype.char == 'S':
-      final_strings[key] = []
+    if key in ['percentiles', 'target_ids', 'target_labels']:
+      # copy
+      final_h5_open.create_dataset(key, data=job0_h5_open[key])
+
+    elif key[-4:] == '_pct':
+      values = np.zeros(job0_h5_open[key].shape)
+      final_h5_open.create_dataset(key, data=values)
+
+    elif job0_h5_open[key].dtype.char == 'S':
+        final_strings[key] = []
+
+    elif job0_h5_open[key].ndim == 1:
+      final_h5_open.create_dataset(key, shape=(num_variants,), dtype=job0_h5_open[key].dtype)
+
     else:
-      final_h5_open.create_dataset(key, shape=key_shape, dtype=job0_h5_open[key].dtype)
+      num_targets = job0_h5_open[key].shape[1]
+      final_h5_open.create_dataset(key, shape=(num_variants, num_targets), dtype=job0_h5_open[key].dtype)
+
+  job0_h5_open.close()
 
   # set values
-  si = 0
+  vi = 0
   for pi in range(num_procs):
     # open job
-    job_h5_file = '%s/job%d/%s' % (out_dir, pi, h5_file)
+    job_h5_file = '%s/job%d/%s' % (out_dir, pi, file_name)
     job_h5_open = h5py.File(job_h5_file, 'r')
 
     # append to final
     for key in job_h5_open.keys():
-        job_seqs = job_h5_open[key].shape[0]
+      if key in ['percentiles', 'target_ids', 'target_labels']:
+        # once is enough
+        pass
+
+      elif key[-4:] == '_pct':
+        # average
+        u_k1 = np.array(final_h5_open[key])
+        x_k = np.array(job_h5_open[key])
+        final_h5_open[key][:] = u_k1 + (x_k - u_k1) / (pi+1)
+
+      else:
         if job_h5_open[key].dtype.char == 'S':
           final_strings[key] += list(job_h5_open[key])
         else:
-          final_h5_open[key][si:si+job_seqs] = job_h5_open[key]
+          job_variants = job_h5_open[key].shape[0]
+          final_h5_open[key][vi:vi+job_variants] = job_h5_open[key]
 
+    vi += job_variants
     job_h5_open.close()
-    si += job_seqs
 
   # create final string datasets
   for key in final_strings:
@@ -212,16 +227,8 @@ def collect_h5(out_dir, num_procs, sad_stat):
 def job_completed(options, pi):
   """Check whether a specific job has generated its
      output file."""
-  out_file = '%s/job%d/scores.h5' % (options.out_dir, pi)
-  valid_file = True
-  if not os.path.isfile(out_file):
-    valid_file = False
-  else:
-    try:
-      out_open = h5py.File(out_file, 'r')
-    except OSError:
-      valid_file = False
-  return valid_file
+  out_file = '%s/job%d/sad.h5' % (options.out_dir, pi)
+  return os.path.isfile(out_file) or os.path.isdir(out_file)
 
 
 ################################################################################

@@ -29,7 +29,7 @@ import numpy as np
 import slurm
 
 """
-basenji_sat_bed_multi.py
+sonnet_sat_bed_multi.py
 
 Perform an in silico saturation mutagenesis of sequences in a BED file,
 using multiple processes.
@@ -39,10 +39,10 @@ using multiple processes.
 # main
 ################################################################################
 def main():
-  usage = 'usage: %prog [options] <params_file> <model_file> <bed_file>'
+  usage = 'usage: %prog [options] <model> <bed_file>'
   parser = OptionParser(usage)
 
-  # basenji_sat_bed.py options
+  # sonnet_sat_bed.py options
   parser.add_option('-d', dest='mut_down',
       default=0, type='int',
       help='Nucleotides downstream of center sequence to mutate [Default: %default]')
@@ -50,7 +50,7 @@ def main():
       default=None,
       help='Genome FASTA for sequences [Default: %default]')
   parser.add_option('-l', dest='mut_len',
-      default=200, type='int',
+      default=0, type='int',
       help='Length of center sequence to mutate [Default: %default]')
   parser.add_option('-o', dest='out_dir',
       default='sat_mut', help='Output directory [Default: %default]')
@@ -63,15 +63,18 @@ def main():
   parser.add_option('--shifts', dest='shifts',
       default='0',
       help='Ensemble prediction shifts [Default: %default]')
+  parser.add_option('--species', dest='species',
+      default='human')
   parser.add_option('--stats', dest='sad_stats',
       default='sum',
-      help='Comma-separated list of stats to save. [Default: %default]')
+      help='Comma-separated list of stats to save (sum/center/scd). [Default: %default]')
   parser.add_option('-t', dest='targets_file',
       default=None, type='str',
       help='File specifying target indexes and labels in table format')
   parser.add_option('-u', dest='mut_up',
       default=0, type='int',
       help='Nucleotides upstream of center sequence to mutate [Default: %default]')
+
 
   # _multi.py options
   parser.add_option('-e', dest='conda_env',
@@ -87,20 +90,19 @@ def main():
       default=None, type='int',
       help='Number of processes, passed by multi script')
   parser.add_option('-q', dest='queue',
-      default='k80',
+      default='gtx1080ti',
       help='SLURM queue on which to run the jobs [Default: %default]')
   parser.add_option('-r', '--restart', dest='restart',
       default=False, action='store_true',
       help='Restart a partially completed job [Default: %default]')
   (options, args) = parser.parse_args()
 
-  if len(args) != 3:
+  if len(args) != 2:
     print(args)
     parser.error('Must provide parameters and model files and BED file')
   else:
-    params_file = args[0]
-    model_file = args[1]
-    bed_file = args[2]
+    model_file = args[0]
+    bed_file = args[1]
 
   #######################################################
   # prep work
@@ -126,7 +128,7 @@ def main():
       cmd = '. /home/drk/anaconda3/etc/profile.d/conda.sh;'
       cmd += ' conda activate %s;' % options.conda_env
 
-      cmd += ' basenji_sat_bed.py %s %s %d' % (
+      cmd += ' sonnet_sat_bed.py %s %s %d' % (
           options_pkl_file, ' '.join(args), pi)
       name = '%s_p%d' % (options.name, pi)
       outf = '%s/job%d.out' % (options.out_dir, pi)

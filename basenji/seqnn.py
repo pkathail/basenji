@@ -40,7 +40,7 @@ class SeqNN():
     # only necessary for my bespoke parameters
     # others are best defaulted closer to the source
     self.augment_rc = False
-    self.augment_shift = 0
+    self.augment_shift = [0]
 
   def build_block(self, current, block_params):
     """Construct a SeqNN block.
@@ -52,8 +52,10 @@ class SeqNN():
 
     # extract name
     block_name = block_params['name']
-    del block_params['name']
 
+    # save upper_tri flatten
+    self.preds_triu |= (block_name == 'upper_tri')
+        
     # if Keras, get block variables names
     pass_all_globals = True
     if block_name[0].isupper():
@@ -62,8 +64,8 @@ class SeqNN():
       block_varnames = block_func.__init__.__code__.co_varnames
 
     # set global defaults
-    global_vars = ['activation', 'batch_norm', 'bn_momentum', 'bn_type',
-      'l2_scale', 'l1_scale']
+    global_vars = ['activation', 'batch_norm', 'bn_momentum', 'norm_type',
+      'l2_scale', 'l1_scale', 'padding', 'kernel_initializer']
     for gv in global_vars:
       gv_value = getattr(self, gv, False)
       if gv_value and (pass_all_globals or gv in block_varnames):
@@ -71,6 +73,24 @@ class SeqNN():
 
     # set remaining params
     block_args.update(block_params)
+    del block_args['name']
+
+    # save representations
+    if block_name == 'conv_tower_nac':
+      block_args['reprs'] = self.reprs
+
+    # U-net style concat helper
+    if block_name == 'concat_unet':
+      # find matching representation
+      concat_repr = None
+      for seq_repr in reversed(self.reprs[:-1]):
+        if seq_repr.shape[1] == current.shape[1]:
+          concat_repr = seq_repr
+          break
+      if concat_repr is None:
+        print('Could not find matching representation for length %d' % current.shape[1], sys.stderr)
+        exit(1)
+      block_args['concat'] = concat_repr
 
     # switch for block
     if block_name[0].islower():
@@ -83,24 +103,28 @@ class SeqNN():
 
     return current
 
-  def build_model(self, save_reprs=False):
+  def build_model(self, save_reprs=True):
     ###################################################
     # inputs
     ###################################################
     sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
-    # self.genome = tf.keras.Input(shape=(1,), name='genome')
     current = sequence
 
     # augmentation
     if self.augment_rc:
       current, reverse_bool = layers.StochasticReverseComplement()(current)
-    current = layers.StochasticShift(self.augment_shift)(current)
-
+    if self.augment_shift != [0]:
+      current = layers.StochasticShift(self.augment_shift)(current)
+    self.preds_triu = False
+    
     ###################################################
     # build convolution blocks
     ###################################################
+    self.reprs = []
     for bi, block_params in enumerate(self.trunk):
       current = self.build_block(current, block_params)
+      if save_reprs:
+        self.reprs.append(current)
 
     # final activation
     current = layers.activate(current, self.activation)
@@ -112,8 +136,6 @@ class SeqNN():
     ###################################################
     # heads
     ###################################################
-    self.preds_triu = False
-
     head_keys = natsorted([v for v in vars(self) if v.startswith('head')])
     self.heads = [getattr(self, hk) for hk in head_keys]
 
@@ -127,7 +149,6 @@ class SeqNN():
 
       # build blocks
       for bi, block_params in enumerate(head):
-        self.preds_triu |= (block_params['name'] == 'upper_tri')
         current = self.build_block(current, block_params)
 
       # transform back from reverse complement
@@ -145,7 +166,7 @@ class SeqNN():
     ###################################################
     self.models = []
     for ho in self.head_output:
-        self.models.append(tf.keras.Model(inputs=sequence, outputs=ho))
+      self.models.append(tf.keras.Model(inputs=sequence, outputs=ho))
     self.model = self.models[0]
     print(self.model.summary())
 
@@ -213,7 +234,7 @@ class SeqNN():
         preds = [layers.SwitchReverse()([self.model(seq), rp]) for (seq,rp) in sequences_rev]
 
       # create layer
-      preds_avg = tf.keras.layers.Average()(preds)      
+      preds_avg = tf.keras.layers.Average()(preds)
 
       # create meta model
       self.ensemble = tf.keras.Model(inputs=sequence, outputs=preds_avg)
@@ -235,16 +256,49 @@ class SeqNN():
         self.model = tf.keras.Model(inputs=sequence, outputs=predictions_slice)
 
 
-  def evaluate(self, seq_data, head_i=0, loss='poisson'):
-    """ Evaluate model on SeqDataset. """
+  def downcast(self, dtype=tf.float16, head_i=None):
+    """ Downcast model output type. """
     # choose model
-    if self.ensemble is None:
+    if self.embed is not None:
+      model = self.embed
+    elif self.ensemble is not None:
+      model = self.ensemble
+    elif head_i is not None:
       model = self.models[head_i]
     else:
+      model = self.model
+
+    # sequence input
+    sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
+
+    # predict and downcast
+    preds = model(sequence)
+    preds = tf.cast(preds, dtype)
+    model_down = tf.keras.Model(inputs=sequence, outputs=preds)
+
+    # replace model
+    if self.embed is not None:  
+      self.embed = model_down
+    elif self.ensemble is not None:
+      self.ensemble = model_down
+    elif head_i is not None:
+      self.models[head_i] = model_down
+    else:
+      self.model = model_down
+
+
+  def evaluate(self, seq_data, head_i=None, loss='poisson'):
+    """ Evaluate model on SeqDataset. """
+    # choose model
+    if self.ensemble is not None:
       model = self.ensemble
+    elif head_i is not None:
+      model = self.models[head_i]
+    else:
+      model = self.model
 
     # compile with dense metrics
-    num_targets = self.model.output_shape[-1]
+    num_targets = model.output_shape[-1]
 
     if loss == 'bce':
       model.compile(optimizer=tf.keras.optimizers.SGD(),
@@ -288,15 +342,15 @@ class SeqNN():
       return self.models[head_i].output_shape[-1]
 
 
-  def predict(self, seq_data, head_i=0, generator=False, **kwargs):
+  def predict(self, seq_data, head_i=None, generator=False, **kwargs):
     """ Predict targets for SeqDataset. """
     # choose model
-    if self.embed is not None:
-      model = self.embed
-    elif self.ensemble is not None:
+    if self.ensemble is not None:
       model = self.ensemble
-    else:
+    elif head_i is not None:
       model = self.models[head_i]
+    else:
+      model = self.model
 
     dataset = getattr(seq_data, 'dataset', None)
     if dataset is None:
@@ -308,16 +362,48 @@ class SeqNN():
       return model.predict(dataset, **kwargs)
 
 
-  def restore(self, model_file, trunk=False):
+  def restore(self, model_file, head_i=0, trunk=False):
     """ Restore weights from saved model. """
     if trunk:
       self.model_trunk.load_weights(model_file)
     else:
-      self.model.load_weights(model_file)
+      self.models[head_i].load_weights(model_file)
+      self.model = self.models[head_i]
 
 
   def save(self, model_file, trunk=False):
     if trunk:
-      self.model_trunk.save(model_file)
+      self.model_trunk.save(model_file, include_optimizer=False)
     else:
-      self.model.save(model_file)
+      self.model.save(model_file, include_optimizer=False)
+
+  def step(self, step=2, head_i=None):
+    """ Step positions across sequence. """
+    # choose model
+    if self.embed is not None:
+      model = self.embed
+    elif self.ensemble is not None:
+      model = self.ensemble
+    elif head_i is not None:
+      model = self.models[head_i]
+    else:
+      model = self.model
+
+    # sequence input
+    sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
+
+    # predict and step across positions
+    preds = model(sequence)
+    step_positions = np.arange(preds.shape[1], step=step)
+    preds_step = tf.gather(preds, step_positions, axis=-2)
+    model_step = tf.keras.Model(inputs=sequence, outputs=preds_step)
+
+    # replace model
+    if self.embed is not None:  
+      self.embed = model_step
+    elif self.ensemble is not None:
+      self.ensemble = model_step
+    elif head_i is not None:
+      self.models[head_i] = model_step
+    else:
+      self.model = model_step

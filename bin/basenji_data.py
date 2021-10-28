@@ -93,7 +93,7 @@ def main():
       help='Sequences per TFRecord file [Default: %default]')
   parser.add_option('--restart', dest='restart',
       default=False, action='store_true',
-      help='Skip already read HDF5 coverage values. [Default: %default]')
+      help='Continue progress from midpoint. [Default: %default]')
   parser.add_option('--seed', dest='seed',
       default=44, type='int',
       help='Random seed [Default: %default]')
@@ -139,6 +139,10 @@ def main():
 
   random.seed(options.seed)
   np.random.seed(options.seed)
+
+  if options.break_t is not None and options.break_t < options.seq_length:
+    print('Maximum contig length --break cannot be less than sequence length.', file=sys.stderr)
+    exit(1)
 
   # transform proportion strides to base pairs
   if options.stride_train <= 1:
@@ -199,20 +203,29 @@ def main():
       contigs = limit_contigs(contigs, peaks_bed)
 
     # filter for large enough
-    contigs = [ctg for ctg in contigs if ctg.end - ctg.start >= options.seq_length]
+    seq_tlength = options.seq_length - 2*options.crop_bp
+    contigs = [ctg for ctg in contigs if ctg.end - ctg.start >= seq_tlength]
 
     # break up large contigs
     if options.break_t is not None:
       contigs = break_large_contigs(contigs, options.break_t)
 
     # print contigs to BED file
-    ctg_bed_file = '%s/contigs.bed' % options.out_dir
-    write_seqs_bed(ctg_bed_file, contigs)
+    # ctg_bed_file = '%s/contigs.bed' % options.out_dir
+    # write_seqs_bed(ctg_bed_file, contigs)
 
 
   ################################################################
   # divide between train/valid/test
   ################################################################
+  # label folds
+  if options.folds is not None:
+    fold_labels = ['fold%d' % fi for fi in range(options.folds)]
+    num_folds = options.folds
+  else:
+    fold_labels = ['train', 'valid', 'test']
+    num_folds = 3
+
   if not options.restart:
     if options.folds is not None:
       # divide by fold pct
@@ -239,13 +252,14 @@ def main():
     for fi in range(len(fold_contigs)):
       fold_contigs[fi] = rejoin_large_contigs(fold_contigs[fi])
 
-  # label folds
-  if options.folds is not None:
-    fold_labels = ['fold%d' % fi for fi in range(options.folds)]
-    num_folds = options.folds
-  else:
-    fold_labels = ['train', 'valid', 'test']
-    num_folds = 3
+    # write labeled contigs to BED file
+    ctg_bed_file = '%s/contigs.bed' % options.out_dir
+    ctg_bed_out = open(ctg_bed_file, 'w')
+    for fi in range(len(fold_contigs)):
+      for ctg in fold_contigs[fi]:
+        line = '%s\t%d\t%d\t%s' % (ctg.chr, ctg.start, ctg.end, fold_labels[fi])
+        print(line, file=ctg_bed_out)
+    ctg_bed_out.close()
 
   if options.split_test:
     exit()
@@ -254,7 +268,6 @@ def main():
   # define model sequences
   ################################################################
   if not options.restart:
-    
     fold_mseqs = []
     for fi in range(num_folds):
       if fold_labels[fi] in ['valid','test']:
@@ -263,7 +276,7 @@ def main():
         stride_fold = options.stride_train
 
       # stride sequences across contig
-      fold_mseqs_fi = contig_sequences(fold_contigs[fi], options.seq_length,
+      fold_mseqs_fi = contig_sequences(fold_contigs[fi], seq_tlength,
                                        stride_fold, options.snap, fold_labels[fi])
       fold_mseqs.append(fold_mseqs_fi)
 
@@ -288,8 +301,8 @@ def main():
         exit(1)
 
       # annotate unmappable positions
-      mseqs_unmap = annotate_unmap(mseqs, options.umap_bed, options.seq_length,
-                                   options.pool_width, options.crop_bp)
+      mseqs_unmap = annotate_unmap(mseqs, options.umap_bed,
+                                   seq_tlength, options.pool_width)
 
       # filter unmappable
       mseqs_map_mask = (mseqs_unmap.mean(axis=1, dtype='float64') < options.umap_t)
@@ -356,7 +369,7 @@ def main():
       print('Skipping existing %s' % seqs_cov_file, file=sys.stderr)
     else:
       cmd = 'basenji_data_read.py'
-      cmd += ' --crop %d' % options.crop_bp      
+      # cmd += ' --crop %d' % options.crop_bp
       cmd += ' -w %d' % options.pool_width
       cmd += ' -u %s' % targets_df['sum_stat'].iloc[ti]
       if clip_ti is not None:
@@ -419,6 +432,7 @@ def main():
       cmd += ' -s %d' % tfr_start
       cmd += ' -e %d' % tfr_end
       cmd += ' --umap_clip %f' % options.umap_clip
+      cmd += ' -x %d' % options.crop_bp
       if options.umap_tfr:
         cmd += ' --umap_tfr'
       if options.umap_bed is not None:
@@ -474,16 +488,15 @@ def main():
 
 
 ################################################################################
-def annotate_unmap(mseqs, unmap_bed, seq_length, pool_width, crop_bp):
+def annotate_unmap(mseqs, unmap_bed, seq_length, pool_width):
   """ Intersect the sequence segments with unmappable regions
          and annoate the segments as NaN to possible be ignored.
 
     Args:
       mseqs: list of ModelSeq's
       unmap_bed: unmappable regions BED file
-      seq_length: sequence length
+      seq_length: sequence length (after cropping)
       pool_width: pooled bin width
-      crop_bp: nucleotides cropped off ends
 
     Returns:
       seqs_unmap: NxL binary NA indicators
@@ -540,11 +553,6 @@ def annotate_unmap(mseqs, unmap_bed, seq_length, pool_width, crop_bp):
 
     seqs_unmap[chr_start_indexes[seq_key], pool_seq_unmap_start:pool_seq_unmap_end] = True
     assert(seqs_unmap[chr_start_indexes[seq_key], pool_seq_unmap_start:pool_seq_unmap_end].sum() == pool_seq_unmap_end-pool_seq_unmap_start)
-
-  # crop
-  if crop_bp > 0:
-    pool_crop = crop_bp // pool_width
-    seqs_unmap = seqs_unmap[:, pool_crop:-pool_crop]
 
   return seqs_unmap
 

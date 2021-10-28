@@ -183,7 +183,7 @@ def intersect_snps_seqs(vcf_file, seq_coords, vision_p=1):
 
 
 def snp_seq1(snp, seq_len, genome_open):
-  """ Produce a one hot coded sequences for a SNP.
+  """ Produce one hot coded sequences for a SNP.
 
     Attrs:
         snp [SNP] :
@@ -503,7 +503,9 @@ def dna_length_1hot(seq, length):
     nback = length - len(seq) - nfront
     seq = 'N' * nfront + seq + 'N' * nback
 
-  seq_1hot = basenji.dna_io.dna_1hot(seq)
+  # n_uniform required to avoid different  
+  #   random nucleotides for each allele
+  seq_1hot = basenji.dna_io.dna_1hot(seq, n_uniform=True)
 
   return seq_1hot, seq
 
@@ -644,7 +646,7 @@ class SNP:
     self.rsid = a[2]
     self.ref_allele = a[3]
     self.alt_alleles = a[4].split(',')
-    # self.alt_allele = self.alt_alleles[0]
+    self.alt_allele = self.alt_alleles[0]
     self.flipped = False
 
     if self.rsid == '.':

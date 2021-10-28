@@ -14,13 +14,10 @@
 # =========================================================================
 import pdb
 import sys
+from typing import Optional, List
 
 import numpy as np
 import tensorflow as tf
-
-# from tensor2tensor.layers.common_attention import attention_bias_proximal
-# from tensor2tensor.layers.common_attention import _generate_relative_positions_embeddings
-# from tensor2tensor.layers.common_attention import _relative_attention_inner
 
 ############################################################
 # Basic
@@ -69,6 +66,62 @@ class Exp(tf.keras.layers.Layer):
     config['minus'] = self.minus
     return config
 
+
+class Scale(tf.keras.layers.Layer):
+  def __init__(self, axis=-1, initializer='zeros'):
+    super(Scale, self).__init__()
+    if isinstance(axis, (list, tuple)):
+      self.axis = axis[:]
+    elif isinstance(axis, int):
+      self.axis = axis
+    else:
+      raise TypeError('Expected an int or a list/tuple of ints for the '
+                      'argument \'axis\', but received: %r' % axis)
+    self.initializer = tf.keras.initializers.get(initializer)
+
+  def build(self, input_shape):
+    # input_shape = tensor_shape.TensorShape(input_shape)
+    if not input_shape.ndims:
+      raise ValueError('Input has undefined rank.')
+    ndims = len(input_shape)
+
+    # Convert axis to list and resolve negatives
+    if isinstance(self.axis, int):
+      self.axis = [self.axis]
+    elif isinstance(self.axis, tuple):
+      self.axis = list(self.axis)
+    for idx, x in enumerate(self.axis):
+      if x < 0:
+        self.axis[idx] = ndims + x
+
+    # Validate axes
+    for x in self.axis:
+      if x < 0 or x >= ndims:
+        raise ValueError('Invalid axis: %d' % x)
+    if len(self.axis) != len(set(self.axis)):
+      raise ValueError('Duplicate axis: {}'.format(tuple(self.axis)))
+
+    param_shape = [input_shape[dim] for dim in self.axis]
+
+    self.scale = self.add_weight(
+        name='scale',
+        shape=param_shape,
+        initializer=self.initializer,
+        trainable=True)
+
+  def call(self, x):
+    # return x * math_ops.cast(self.scale, x.dtype)
+    return x * self.scale
+
+  def get_config(self):
+    config = super().get_config().copy()
+    config.update({
+      'axis': self.axis,
+      'initializer': tf.keras.initializers.serialize(self.initializer)
+    })
+    return config
+
+
 class PolyReLU(tf.keras.layers.Layer):
   def __init__(self, shift=0):
     super(PolyReLU, self).__init__()
@@ -79,8 +132,8 @@ class PolyReLU(tf.keras.layers.Layer):
     return y
 
 class GELU(tf.keras.layers.Layer):
-  def __init__(self):
-    super(GELU, self).__init__()
+  def __init__(self, **kwargs):
+    super(GELU, self).__init__(**kwargs)
   def call(self, x):
     # return tf.keras.activations.sigmoid(1.702 * x) * x
     return tf.keras.activations.sigmoid(tf.constant(1.702) * x) * x
@@ -134,61 +187,386 @@ class CenterAverage(tf.keras.layers.Layer):
 ############################################################
 # Attention
 ############################################################
-class Attention(tf.keras.layers.Layer):
-  def __init__(self, max_relative_position, dropout=0):
-    super(Attention, self).__init__()
-    self.max_relative_position = max_relative_position
-    self.dropout = dropout
+def _prepend_dims(x, num_dims):
+  return tf.reshape(x, shape=[1] * num_dims + x.shape)
 
-  def build(self, input_shape):
-    # extract shapes
-    qs, vs, ks = input_shape
-    seq_length = qs[-2]
-    depth_kq = qs[-1]
-    depth_q = ks[-1]
-    assert(depth_kq == depth_q)
-    depth_v = vs[-1]
+def positional_features_central_mask(positions: tf.Tensor,
+                                        feature_size: int,
+                                        seq_length: int):
+  """Positional features using a central mask (allow only central features)."""
+  pow_rate = np.exp(np.log(seq_length+1) / feature_size).astype('float32')
+  center_widths = tf.pow(pow_rate, tf.range(1, feature_size + 1, dtype=tf.float32))
+  center_widths = center_widths - 1
+  center_widths = _prepend_dims(center_widths, positions.shape.rank)
+  outputs = tf.cast(center_widths > tf.abs(positions)[..., tf.newaxis],
+                    tf.float32)
+  tf.TensorShape(outputs.shape).assert_is_compatible_with(
+      positions.shape + [feature_size])
+  return outputs
 
-    # initialize bias
-    self.attn_bias = attention_bias_proximal(seq_length)
+def gamma_pdf(x, concentration, rate):
+  """Gamma probability distribution function: p(x|concentration, rate)."""
+  log_unnormalized_prob = tf.math.xlogy(concentration - 1., x) - rate * x
+  log_normalization = (tf.math.lgamma(concentration) -
+                       concentration * tf.math.log(rate))
+  return tf.exp(log_unnormalized_prob - log_normalization)
 
-    # initialize relative positions
-    self.relations_keys = _generate_relative_positions_embeddings(
-      seq_length, seq_length, depth_kq, self.max_relative_position,
-      "relative_positions_keys")
-    self.relations_values = _generate_relative_positions_embeddings(
-      seq_length, seq_length, depth_v, self.max_relative_position,
-      "relative_positions_values")
-    # tf.contrib.summary.histogram('relations_keys', self.relations_keys)
-    # tf.contrib.summary.histogram('relations_values', self.relations_values)
 
-  def call(self, qvk):
-    query, value, key = qvk
+def positional_features_gamma(positions: tf.Tensor,
+                              feature_size: int,
+                              seq_length: Optional[int] = None,
+                              bin_size: Optional[int] = None,
+                              stddev=None,
+                              start_mean=None):
+  """Positional features computed using the gamma distributions."""
+  del bin_size  # Unused.
+  if seq_length is None:
+    seq_length = tf.reduce_max(tf.abs(positions)) + 1
+  if stddev is None:
+    stddev = seq_length / (2 * feature_size)
+  if start_mean is None:
+    start_mean = seq_length / feature_size
+  mean = tf.linspace(start_mean, seq_length, num=feature_size)
+  mean = _prepend_dims(mean, positions.shape.rank)
+  concentration = (mean / stddev)**2
+  rate = mean / stddev**2
+  probabilities = gamma_pdf(
+      tf.abs(tf.cast(positions, dtype=tf.float32))[..., tf.newaxis],
+      concentration, rate)
+  probabilities += 1e-8  # To ensure numerical stability.
+  outputs = probabilities / tf.reduce_max(probabilities)
+  tf.TensorShape(outputs.shape).assert_is_compatible_with(
+      positions.shape + [feature_size])
+  return outputs
 
-    # expand to fake multi-head
-    key = tf.expand_dims(key, axis=1)
-    query = tf.expand_dims(query, axis=1)
-    value = tf.expand_dims(value, axis=1)
 
-    # Compute self attention considering the relative position embeddings.
-    logits = _relative_attention_inner(query, key, self.relations_keys, True)
-    logits += self.attn_bias
+def get_positional_feature_function(name):
+  """Returns positional feature functions."""
+  available = {
+      'positional_features_central_mask': positional_features_central_mask,
+      'positional_features_gamma': positional_features_gamma,
+  }
+  # available = {
+  #     'positional_features_exponential': positional_features_exponential,
+  #     'positional_features_cosine': positional_features_cosine,
+  #     'positional_features_linear_masks': positional_features_linear_masks,
+  #     'positional_features_sin_cos': positional_features_sin_cos,
+  # }
+  if name not in available:
+    raise ValueError(f'Function {name} not available in {available.keys()}')
+  return available[name]
 
-    weights = tf.nn.softmax(logits, name="attention_weights")
-    weights = tf.nn.dropout(weights, rate=self.dropout)
+def positional_features_all(positions: tf.Tensor,
+                            feature_size: int,
+                            seq_length: Optional[int] = None,
+                            bin_size: Optional[int] = None,
+                            feature_functions: Optional[List[str]] = None,
+                            symmetric=False):
+  """Compute relative positional encodings/features.
 
-    z = _relative_attention_inner(weights, value, self.relations_values, False)
+  Each positional feature function will compute/provide the same fraction of
+  features, making up the total of feature_size.
 
-    # slice single head
-    z = z[:,0,:,:]
+  Args:
+    positions: Tensor of relative positions of arbitrary shape.
+    feature_size: Total number of basis functions.
+    seq_length: Sequence length denoting the characteristic length that
+      the individual positional features can use. This is required since the
+      parametrization of the input features should be independent of `positions`
+      while it could still require to use the total number of features.
+    bin_size: Bin sized used to partition the sequence. This can be used to
+      compute features on the absolute scale relative to the genome.
+    feature_functions: List of different feature functions to use. Each function
+      will take as argument: positions, sequence length and number of features
+      to compute.
+    symmetric: If True, the resulting features will be symmetric across the
+      relative position of 0 (i.e. only absolute value of positions will
+      matter). If false, then both the symmetric and asymmetric version
+      (symmetric multiplied by sign(positions)) of the features will be used.
 
-    return z
+  Returns:
+    Tensor of shape: `positions.shape + (feature_size,)`.
+  """
+  if feature_functions is None:
+    feature_functions = ['positional_features_central_mask']
+  num_components = len(feature_functions)  # 1 per each basis function
+  if not symmetric:
+    num_components = 2 * num_components
+
+  # For now, we do not allow odd sized embeddings.
+  if feature_size % num_components != 0:
+    raise ValueError(
+        f'feature_size has to be divisible by {num_components}')
+
+  feature_functions = [get_positional_feature_function(f)
+                       for f in feature_functions]
+  num_basis_per_class = feature_size // num_components
+  embeddings = tf.concat([f(tf.abs(positions), num_basis_per_class,
+                            seq_length, bin_size)
+                          for f in feature_functions],
+                         axis=-1)
+  if not symmetric:
+    embeddings = tf.concat([embeddings,
+                            tf.sign(positions)[..., tf.newaxis] * embeddings],
+                           axis=-1)
+  tf.TensorShape(embeddings.shape).assert_is_compatible_with(
+      positions.shape + [feature_size])
+  return embeddings
+
+def positional_features(positions: tf.Tensor,
+                        feature_size: int,
+                        seq_length: int,
+                        symmetric=False):
+  """Compute relative positional encodings/features.
+
+  Each positional feature function will compute/provide the same fraction of
+  features, making up the total of feature_size.
+
+  Args:
+    positions: Tensor of relative positions of arbitrary shape.
+    feature_size: Total number of basis functions.
+    seq_length: Sequence length denoting the characteristic length that
+      the individual positional features can use. This is required since the
+      parametrization of the input features should be independent of `positions`
+      while it could still require to use the total number of features.
+    symmetric: If True, the resulting features will be symmetric across the
+      relative position of 0 (i.e. only absolute value of positions will
+      matter). If false, then both the symmetric and asymmetric version
+      (symmetric multiplied by sign(positions)) of the features will be used.
+
+  Returns:
+    Tensor of shape: `positions.shape + (feature_size,)`.
+  """
+  if symmetric:
+    num_components = 1
+  else:
+    num_components = 2
+  num_basis_per_class = feature_size // num_components
+  
+  embeddings = positional_features_central_mask(positions, num_basis_per_class, seq_length)
+
+  if not symmetric:
+    embeddings = tf.concat([embeddings, tf.sign(positions)[..., tf.newaxis] * embeddings], axis=-1)
+
+  tf.TensorShape(embeddings.shape).assert_is_compatible_with(
+      positions.shape + [feature_size])
+
+  return embeddings
+
+def relative_shift(x):
+  """Shift the relative logits like in TransformerXL."""
+  # We prepend zeros on the final timescale dimension.
+  to_pad = tf.zeros_like(x[..., :1])
+  x = tf.concat([to_pad, x], -1)
+  _, num_heads, t1, t2 = x.shape
+  x = tf.reshape(x, [-1, num_heads, t2, t1])
+  x = tf.slice(x, [0, 0, 1, 0], [-1, -1, -1, -1])
+  x = tf.reshape(x, [-1, num_heads, t1, t2 - 1])
+  x = tf.slice(x, [0, 0, 0, 0], [-1, -1, -1, (t2 + 1) // 2])
+  return x
+
+class MultiheadAttention(tf.keras.layers.Layer):
+  """Multi-head attention."""
+
+  def __init__(self,
+               value_size,
+               key_size,
+               heads,
+               scaling=True,
+               attention_dropout_rate=0,
+               relative_position_symmetric=False,
+               relative_position_functions=['positional_features_central_mask'],
+               num_position_features=None,
+               positional_dropout_rate=0,
+               zero_initialize=True,
+               transpose_stride=0,
+               gated=False,
+               initializer=None,
+               l2_scale=0):
+    """Creates a MultiheadAttention module.
+       Original version written by Ziga Avsec.
+
+    Args:
+      value_size: The size of each value embedding per head.
+      key_size: The size of each key and query embedding per head.
+      heads: The number of independent queries per timestep.
+      scaling: Whether to scale the attention logits.
+      attention_dropout_rate: Dropout rate for attention logits.
+      relative_position_symmetric: If True, the symmetric version of basis
+        functions will be used. If False, a symmetric and asymmetric versions
+        will be use.
+      relative_position_functions: List of function names used for relative
+        positional biases.
+      num_position_features: Number of relative positional features
+        to compute. If None, `value_size * num_heads` is used.
+      positional_dropout_rate: Dropout rate for the positional encodings if
+        relative positions are used.
+      zero_initialize: if True, the final linear layer will be 0 initialized.
+      initializer: Initializer for the projection layers. If unspecified,
+        VarianceScaling is used with scale = 2.0.
+    """
+    super().__init__()
+    self._value_size = value_size
+    self._key_size = key_size
+    self._num_heads = heads
+    self._attention_dropout_rate = attention_dropout_rate
+    self._scaling = scaling
+    self._gated = gated
+    self._relative_position_symmetric = relative_position_symmetric
+    self._relative_position_functions = relative_position_functions
+    if num_position_features is None:
+      # num_position_features needs to be divisible by the number of
+      # relative positional functions *2 (for symmetric & asymmetric version).
+      divisible_by = 2 * len(self._relative_position_functions)
+      self._num_position_features = (
+          (self._value_size // divisible_by) * divisible_by)
+    else:
+      self._num_position_features = num_position_features
+    self._positional_dropout_rate = positional_dropout_rate
+    self._l2_scale = l2_scale
+    self._initializer = initializer
+    if self._initializer is None:
+      self._initializer = tf.keras.initializers.VarianceScaling(scale=2.0)
+
+    key_proj_size = self._key_size * self._num_heads
+    embedding_size = self._value_size * self._num_heads
+
+    self._q_layer = tf.keras.layers.Dense(
+        key_proj_size,
+        name='q_layer',
+        use_bias=False,
+        kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        kernel_initializer=self._initializer)
+    self._k_layer = tf.keras.layers.Dense(
+        key_proj_size,
+        name='k_layer',
+        use_bias=False,
+        kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        kernel_initializer=self._initializer)
+    self._v_layer = tf.keras.layers.Dense(
+        embedding_size,
+        name='v_layer',
+        use_bias=False,
+        kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        kernel_initializer=self._initializer)
+    if self._gated:
+      self._gate_layer = tf.keras.layers.Dense(
+          embedding_size,
+          activation='activation',
+          name='gate',
+          use_bias=False,
+          kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+          kernel_initializer=self._initializer)
+    w_init = tf.keras.initializers.Zeros() if zero_initialize else self._initializer
+    if transpose_stride > 0:
+      self._embedding_layer = tf.keras.layers.Conv1DTranspose(
+          filters=embedding_size,
+          kernel_size=3,
+          strides=transpose_stride,
+          padding='same',
+          kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+          kernel_initializer=w_init)
+    else:
+      self._embedding_layer = tf.keras.layers.Dense(
+          embedding_size,
+          name='embedding_layer',
+          kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+          kernel_initializer=w_init)
+
+    # Create relative position layers
+    self._r_k_layer = tf.keras.layers.Dense(
+        key_proj_size,
+        name='r_k_layer',
+        use_bias=False,
+        kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        kernel_initializer=self._initializer)
+    self._r_w_bias = self.add_weight('r_w_bias',
+          shape=[1, self._num_heads, 1, self._key_size],
+          initializer=self._initializer,
+          dtype=tf.float32)
+    self._r_r_bias = self.add_weight('r_r_bias',
+          shape=[1, self._num_heads, 1, self._key_size],
+          initializer=self._initializer,
+          dtype=tf.float32)
+
+  def _multihead_output(self, linear_layer, inputs):
+    """Applies a standard linear to inputs and returns multihead output."""
+    
+    # output = snt.BatchApply(linear)(inputs)  # [B, T, H * KV]
+    output = linear_layer(inputs)
+    _, seq_len, num_channels = output.shape
+
+    # Split H * Channels into separate axes.
+    num_kv_channels = num_channels // self._num_heads
+    output = tf.reshape(output, shape=[-1, seq_len, self._num_heads, num_kv_channels])
+    # [B, T, H, KV] -> [B, H, T, KV]
+    return tf.transpose(output, [0, 2, 1, 3])
+
+
+  def call(self, inputs, training=False):
+    # Initialise the projection layers.
+    embedding_size = self._value_size * self._num_heads
+    seq_len = inputs.shape[1]
+
+    # Compute q, k and v as multi-headed projections of the inputs.
+    q = self._multihead_output(self._q_layer, inputs)  # [B, H, T, K]
+    k = self._multihead_output(self._k_layer, inputs)  # [B, H, T, K]
+    v = self._multihead_output(self._v_layer, inputs)  # [B, H, T, V]
+
+    # Scale the query by the square-root of key size.
+    if self._scaling:
+      q *= self._key_size**-0.5
+
+    # Project positions to form relative keys.
+    distances = tf.range(-seq_len + 1, seq_len, dtype=tf.float32)[tf.newaxis]
+    positional_encodings = positional_features(
+        positions=distances,
+        feature_size=self._num_position_features,
+        seq_length=seq_len,
+        symmetric=self._relative_position_symmetric)
+    # [1, 2T-1, Cr]
+    
+    if training:
+      positional_encodings = tf.nn.dropout(
+          positional_encodings, rate=self._positional_dropout_rate)
+
+    # [1, H, 2T-1, K]
+    r_k = self._multihead_output(self._r_k_layer, positional_encodings)
+
+    # Add shifted relative logits to content logits.
+    # [B, H, T', T]
+    content_logits = tf.matmul(q + self._r_w_bias, k, transpose_b=True)
+    # [B, H, T', 2T-1]
+    relative_logits = tf.matmul(q + self._r_r_bias, r_k, transpose_b=True)
+    #  [B, H, T', T]
+    relative_logits = relative_shift(relative_logits)
+    logits = content_logits + relative_logits
+    weights = tf.nn.softmax(logits)
+
+    # Dropout on the attention weights.
+    if training:
+      weights = tf.nn.dropout(weights, rate=self._attention_dropout_rate)
+
+    # Transpose and reshape the output.
+    output = tf.matmul(weights, v)  # [B, H, T', V]
+    output_transpose = tf.transpose(output, [0, 2, 1, 3])  # [B, T', H, V]
+    attended_inputs = tf.reshape(output_transpose,
+                                 shape=[-1, seq_len, embedding_size])
+
+    # Gate
+    if self._gated:
+      attended_inputs = self._gate_layer(attended_inputs)
+
+    # Final linear layer
+    output = self._embedding_layer(attended_inputs)
+
+    return output
 
   def get_config(self):
     config = super().get_config().copy()
     config.update({
-      'max_relative_position': self.max_relative_position,
-      'dropout': self.dropout
+      'value_size': self._value_size,
+      'key_size': self._key_size
     })
     return config
 
@@ -239,9 +617,14 @@ class WheezeExcite(tf.keras.layers.Layer):
 
 
 class SqueezeExcite(tf.keras.layers.Layer):
-  def __init__(self, additive=False):
+  def __init__(self, activation='relu', additive=False, bottleneck_ratio=8,
+    batch_norm=False, bn_momentum=0.9):
     super(SqueezeExcite, self).__init__()
+    self.activation = activation
     self.additive = additive
+    self.batch_norm = batch_norm
+    self.bn_momentum = bn_momentum
+    self.bottleneck_ratio = bottleneck_ratio
 
   def build(self, input_shape):
     self.num_channels = input_shape[-1]
@@ -257,19 +640,28 @@ class SqueezeExcite(tf.keras.layers.Layer):
       exit(1)
 
     self.dense1 = tf.keras.layers.Dense(
-      units=self.num_channels//4,
+      units=self.num_channels//self.bottleneck_ratio,
       activation='relu')
     self.dense2 = tf.keras.layers.Dense(
       units=self.num_channels,
       activation=None)
+    if self.batch_norm:
+      self.bn = tf.keras.layers.BatchNormalization(
+        momentum=self.bn_momentum,
+        gamma_initializer='zeros')
 
   def call(self, x):
+    # activate
+    x = activate(x, self.activation)
+
     # squeeze
     squeeze = self.gap(x)
 
     # excite
     excite = self.dense1(squeeze)
     excite = self.dense2(excite)
+    if self.batch_norm:
+      excite = self.bn(excite)
 
     # scale
     if self.one_or_two == 'one':
@@ -279,7 +671,6 @@ class SqueezeExcite(tf.keras.layers.Layer):
 
     if self.additive:
       xs = x + excite
-      xs = tf.keras.activations.relu(xs)
     else:
       excite = tf.keras.activations.sigmoid(excite)
       xs = x * excite
@@ -289,7 +680,11 @@ class SqueezeExcite(tf.keras.layers.Layer):
   def get_config(self):
     config = super().get_config().copy()
     config.update({
-      'additive': self.additive
+      'activation': self.activation,
+      'additive': self.additive,
+      'batch_norm': self.batch_norm,
+      'bn_momentum': self.bn_momentum,
+      'bottleneck_ratio': self.bottleneck_ratio
     })
     return config
 
@@ -325,6 +720,57 @@ class GlobalContext(tf.keras.layers.Layer):
     xs = x + transform # [batch x length x channels]
 
     return xs
+
+
+############################################################
+# Pooling
+############################################################
+class SoftmaxPool1D(tf.keras.layers.Layer):
+  """Pooling operation with optional weights."""
+
+  def __init__(self,
+               pool_size: int = 2,
+               per_channel: bool = False,
+               init_gain: float = 2.0):
+    """Softmax pooling.
+
+    Args:
+      pool_size: Pooling size, same as in Max/AvgPooling.
+      per_channel: If True, the logits/softmax weights will be computed for
+        each channel separately. If False, same weights will be used across all
+        channels.
+      init_gain: When 0.0 is equivalent to avg pooling, and when
+        ~2.0 and it's equivalent to max pooling.
+    """
+    super(SoftmaxPool1D, self).__init__()
+    self.pool_size = pool_size
+    self.per_channel = per_channel
+    self.init_gain = init_gain
+    self.logit_linear = None
+
+  def build(self, input_shape):
+    self.num_channels = input_shape[-1]
+    self.logit_linear = tf.keras.layers.Dense(
+        units=self.num_channels if self.per_channel else 1,
+        use_bias=False,
+        kernel_initializer=tf.keras.initializers.Identity(self.init_gain))
+
+  def call(self, inputs):
+    _, seq_length, num_channels = inputs.shape
+    inputs = tf.reshape(inputs,
+        (-1, seq_length // self.pool_size, self.pool_size, num_channels))
+    return tf.reduce_sum(
+        inputs * tf.nn.softmax(self.logit_linear(inputs), axis=-2),
+        axis=-2)
+
+  def get_config(self):
+    config = super().get_config().copy()
+    config.update({
+      'pool_size': self.pool_size,
+      'init_gain': self.init_gain
+    })
+    return config
+
 
 ############################################################
 # Position
@@ -696,10 +1142,14 @@ class EnsembleShift(tf.keras.layers.Layer):
 
 class StochasticShift(tf.keras.layers.Layer):
   """Stochastically shift a one hot encoded DNA sequence."""
-  def __init__(self, shift_max=0, pad='uniform'):
+  def __init__(self, shift_max=0, symmetric=True, pad='uniform'):
     super(StochasticShift, self).__init__()
     self.shift_max = shift_max
-    self.augment_shifts = tf.range(-self.shift_max, self.shift_max+1)
+    self.symmetric = symmetric
+    if self.symmetric:
+      self.augment_shifts = tf.range(-self.shift_max, self.shift_max+1)
+    else:
+      self.augment_shifts = tf.range(0, self.shift_max+1)
     self.pad = pad
 
   def call(self, seq_1hot, training=None):
@@ -718,6 +1168,7 @@ class StochasticShift(tf.keras.layers.Layer):
     config = super().get_config().copy()
     config.update({
       'shift_max': self.shift_max,
+      'symmetric': self.symmetric,
       'pad': self.pad
     })
     return config

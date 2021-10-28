@@ -26,14 +26,14 @@ import numpy as np
 # Methods to load the training data.
 ################################################################################
 
-def dna_1hot(seq, seq_len=None, n_uniform=False):
+def dna_1hot(seq, seq_len=None, n_uniform=False, n_sample=False):
   """ dna_1hot
 
     Args:
       seq:       nucleotide sequence.
       seq_len:   length to extend/trim sequences to.
       n_uniform: represent N's as 0.25, forcing float16,
-                 rather than sampling.
+      n_sample:  sample ACGT for N
 
     Returns:
       seq_code: length by nucleotides array representation.
@@ -72,9 +72,9 @@ def dna_1hot(seq, seq_len=None, n_uniform=False):
       else:
         if n_uniform:
           seq_code[i, :] = 0.25
-        else:
+        elif n_sample:
           ni = random.randint(0,3)
-          seq_code[i, ni] = 1          
+          seq_code[i, ni] = 1
 
   return seq_code
 
@@ -122,16 +122,22 @@ def hot1_augment(Xb, fwdrc=True, shift=0):
       Xbt:    Transformed version of Xb
     """
 
+  if Xb.ndim == 2:
+    singleton = True
+    Xb = np.expand_dims(Xb, axis=0)
+  else:
+    singleton = False
+
   if Xb.dtype == bool:
     nval = 0
   else:
-    nval = 1. / Xb.shape[2]
+    nval = 0.25
 
   if shift == 0:
     Xbt = Xb
 
   elif shift > 0:
-    Xbt = np.zeros(Xb.shape)
+    Xbt = np.zeros(Xb.shape, dtype=Xb.dtype)
 
     # fill in left unknowns
     Xbt[:, :shift, :] = nval
@@ -155,10 +161,13 @@ def hot1_augment(Xb, fwdrc=True, shift=0):
   if not fwdrc:
     Xbt = hot1_rc(Xbt)
 
+  if singleton:
+    Xbt = Xbt[0]
+
   return Xbt
 
 
-def hot1_delete(seq_1hot, pos, delete_len):
+def hot1_delete(seq_1hot, pos, delete_len, pad_value=None):
   """ hot1_delete
 
     Delete "delete_len" nucleotides starting at
@@ -171,12 +180,13 @@ def hot1_delete(seq_1hot, pos, delete_len):
   # seq_1hot[100:-3,:] = seq_1hot[100+3:,:]
 
   # change right end to N's
-  if seq_1hot.dtype == bool:
-    nval = 0
-  else:
-    nval = 0.25
+  if pad_value is None:
+    if seq_1hot.dtype == bool:
+      pad_value = 0
+    else:
+      pad_value = 0.25
 
-  seq_1hot[-delete_len:, :] = nval
+  seq_1hot[-delete_len:, :4] = pad_value
 
 
 def hot1_dna(seqs_1hot):
@@ -242,7 +252,7 @@ def hot1_insert(seq_1hot, pos, insert_seq):
   # seq_1hot[100+3:,:] = seq_1hot[100:-3,:]
 
   # reset
-  seq_1hot[pos:pos + len(insert_seq), :] = 0
+  seq_1hot[pos:pos + len(insert_seq), :4] = 0
 
   for i in range(len(insert_seq)):
     nt = insert_seq[i]
@@ -295,7 +305,7 @@ def hot1_set(seq_1hot, pos, nt):
     """
 
   # reset
-  seq_1hot[pos, :] = 0
+  seq_1hot[pos, :4] = 0
 
   # set
   if nt == 'A':
