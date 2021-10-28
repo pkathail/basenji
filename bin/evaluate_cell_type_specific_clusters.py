@@ -127,8 +127,8 @@ def main():
   log_performance_by_peak_type = pd.DataFrame([], index=peak_types, columns=cell_types)
   for peak_type in peak_types:
     for cell_type in cell_types:
-        log_performance_by_peak_type.loc[peak_type, cell_type] = pearsonr(np.log2(peak_bed_preds[peak_type][f"{cell_type}_target"]+1),
-                                                                      np.log2(peak_bed_preds[peak_type][f"{cell_type}_pred"]+1))[0]
+      log_performance_by_peak_type.loc[peak_type, cell_type] = pearsonr(np.log2(peak_bed_preds[peak_type][f"{cell_type}_target"]+1),
+                                                                        np.sign(peak_bed_preds[peak_type][f"{cell_type}_pred"])*np.log2(np.abs(peak_bed_preds[peak_type][f"{cell_type}_pred"])+1))[0]
   # bar plot of all peak types
   cmap = plt.get_cmap('tab10')
   target_order = [2, 4, 8, 9, 7, 3, 6, 1, 5, 0, 10]
@@ -185,7 +185,7 @@ def main():
 
         # take log2
         test_targets_ti_log = np.log2(test_targets_ti_flat + 1)
-        test_preds_ti_log = np.log2(test_preds_ti_flat + 1)
+        test_preds_ti_log = np.sign(test_preds_ti_flat)*np.log2(np.abs(test_preds_ti_flat) + 1)
 
         ax[i] = scatter_plot(test_targets_ti_log, test_preds_ti_log, peak_set, 
                              ax[i], nonzero_pearson=True)
@@ -211,7 +211,7 @@ def main():
 
         # take log2
         test_targets_ti_log = np.log2(test_targets_ti_flat + 1)
-        test_preds_ti_log = np.log2(test_preds_ti_flat + 1)
+        test_preds_ti_log = np.sign(test_preds_ti_flat)*np.log2(np.abs(test_preds_ti_flat) + 1)
         
         if i == 0:
             bin_counts, bins = np.histogram(np.log2(peak_bed_preds[peak_set][f"{ct}_target"].values + 1), 
