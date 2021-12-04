@@ -282,6 +282,9 @@ def main():
   preds = h5py.File(f"{options.out_dir}/predict.h5", "r")
   preds = np.squeeze(preds["preds"][:,:,:])
 
+  nonzero_inds = np.where(targets >= 0)
+  targets = targets[nonzero_inds]
+  preds = preds[nonzero_inds]
 
   # take log2
   targets_ti_log = np.log2(targets.flatten().astype('float32') + 1)
