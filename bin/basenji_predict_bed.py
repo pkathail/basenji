@@ -228,7 +228,7 @@ def main():
   out_h5.create_dataset('end', data=site_seqs_end)
 
   # write predict_regions.bed
-  site_coords_df = pd.DataFrame({"chr": site_seqs_chr, 
+  site_coords_df = pd.DataFrame({"chr": [c.decode("utf-8") for c in site_seqs_chr], 
                                  "start": site_seqs_start, 
                                  "end": site_seqs_end,
                                  "peak": [f"peak_{i}" for i in range(len(site_seqs_chr))]})
