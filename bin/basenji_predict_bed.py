@@ -19,6 +19,7 @@ from optparse import OptionParser
 
 import json
 import os
+import subprocess
 import pdb
 import pickle
 import sys
@@ -30,6 +31,11 @@ import pysam
 import pyBigWig
 import tensorflow as tf
 
+import matplotlib
+matplotlib.use('PDF')
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 if tf.__version__[0] == '1':
   tf.compat.v1.enable_eager_execution()
 
@@ -37,6 +43,7 @@ from basenji import bed
 from basenji import dna_io
 from basenji import seqnn
 from basenji import stream
+from basenji import plots
 
 '''
 basenji_predict_bed.py
@@ -220,6 +227,20 @@ def main():
   out_h5.create_dataset('start', data=site_seqs_start)
   out_h5.create_dataset('end', data=site_seqs_end)
 
+  # write predict_regions.bed
+  site_coords_df = pd.DataFrame({"chr": site_seqs_chr, 
+                                 "start": site_seqs_start, 
+                                 "end": site_seqs_end,
+                                 "peak": [f"peak_{i}" for i in range(len(site_seqs_chr))]})
+  site_coords_df.to_csv(f"{options.out_dir}/predict_regions.bed", sep="\t", header=False, index=False)
+
+  # get target signal
+  bigwigAverageBedCmd = f"/clusterfs/nilah/pooja/software/bigWigAverageOverBed /clusterfs/nilah/pooja/kidney_data/211028_comb_primaryTubule_bulk/tobias/atacorrect/all_preps_merged_corrected.bw {options.out_dir}/predict_regions.bed {options.out_dir}/atac_target_signal.out"
+
+  p = subprocess.Popen(
+      bigwigAverageBedCmd,
+      shell=True, stdout=subprocess.PIPE)
+
 
   #################################################################
   # predict scores, write output
@@ -253,6 +274,33 @@ def main():
   # close output HDF5
   out_h5.close()
 
+  # read in target signal
+  targets = pd.read_csv(f"{options.out_dir}/atac_target_signal.out", 
+                         sep="\t",
+                         names=["name", "size", "covered", "sum", "mean0", "mean"])["sum"].values
+  # read in predictions
+  preds = h5py.File(f"{options.out_dir}/predict.h5", "r")
+  preds = np.squeeze(preds["preds"][:,:,:])
+
+
+  # take log2
+  targets_ti_log = np.log2(targets.flatten().astype('float32') + 1)
+  preds_ti_log = np.log2(preds.flatten().astype('float32') + 1)
+
+  # plot log2
+  sns.set(font_scale=1.2, style='ticks')
+  out_pdf = '%s/scatter.pdf' % (options.out_dir)
+  plots.regplot(
+      targets_ti_log,
+      preds_ti_log,
+      out_pdf,
+      poly_order=1,
+      alpha=0.3,
+      sample=2000,
+      figsize=(6, 6),
+      x_label='log2 Experiment',
+      y_label='log2 Prediction',
+      table=True)
 
 def bigwig_open(bw_file, genome_file):
   """ Open the bigwig file for writing and write the header. """
