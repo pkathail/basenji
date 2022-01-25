@@ -22,9 +22,61 @@ import tensorflow as tf
 from tensorflow.python.ops import math_ops
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import dtypes
+from tensorflow.python.keras import backend as K
 
 from basenji import layers
 from basenji import metrics
+
+def multinomial_nll(true_counts, logits):
+    """Compute the multinomial negative log-likelihood along the sequence (axis=1)
+    and sum the values across all each channels
+    Args:
+      true_counts: observed count values (batch, seqlen, channels)
+      logits: predicted logit values (batch, seqlen, channels)
+    """
+    counts_per_example = tf.reduce_sum(true_counts, axis=-1)
+
+    dist = tf.contrib.distributions.Multinomial(total_count=counts_per_example,
+                                                logits=logits_perm)
+
+    # Normalize by batch size. One could also normalize by
+    # sequence length here.
+    batch_size = tf.to_float(tf.shape(true_counts)[0])
+
+    return -tf.reduce_sum(dist.log_prob(true_counts)) / batch_size
+
+
+class PoissonMultinomialNLL:
+
+    def __init__(self, dnase_task_weight=0.5, profile_task_weight=0.5):
+        self.dnase_task_weight = dnase_task_weight
+        self.footprint_profile_task_weight = profile_task_weight*(1-self.dnase_task_weight)
+        self.footprint_count_task_weight = 1 - self.dnase_task_weight - self.footprint_profile_task_weight
+
+    def __call__(self, true_counts, preds):
+        poisson_loss_fn = tf.keras.losses.Poisson()
+
+        dnase_counts = true_counts[:,:,0]
+        dnase_preds = preds[:,:,0]
+        dnase_loss = poisson_loss_fn(dnase_counts, dnase_preds)
+
+        footprint_counts = true_counts[:,:,1:]
+        footprint_preds = preds[:,:,1:]
+        footprint_count_loss = poisson_loss_fn(K.sum(footprint_counts, axis=(-2, -1)),
+                                               K.sum(footprint_preds, axis=(-2, -1)))
+
+        probs =  footprint_preds / K.sum(footprint_preds, axis=(-2,-1), keepdims=True)
+        logits = K.log(probs / (1 - probs))
+
+        # multinomial loss
+        footprint_profile_loss = multinomial_nll(footprint_counts, logits)
+
+
+        return self.dnase_task_weight*dnase_loss + self.footprint_profile_task_weight*footprint_profile_loss + self.footprint_count_task_weight*footprint_count_loss
+
+    def get_config(self):
+        return {"c_task_weight": self.c_task_weight}
+
 
 class Trainer:
   def __init__(self, params, train_data, eval_data, out_dir):
@@ -44,6 +96,8 @@ class Trainer:
       self.loss_fn = tf.keras.losses.MSE
     elif self.loss == 'bce':
       self.loss_fn = tf.keras.losses.BinaryCrossentropy()
+    elif self.loss = 'poisson_multinomial_nll':
+      self.loss_fn = PoissonMultinomialNLL()
     else:
       self.loss_fn = tf.keras.losses.Poisson()
 
@@ -70,6 +124,9 @@ class Trainer:
     for model in seqnn_model.models:
       if self.loss == 'bce':
         model_metrics = [metrics.SeqAUC(curve='ROC'), metrics.SeqAUC(curve='PR')]
+      elif self.loss == 'poisson_multinomial_nll':
+        num_targets = 2
+        model_metrics = [metrics.PearsonRProfile(num_targets), metrics.R2Profile(num_targets)]
       else:
         num_targets = model.output_shape[-1]
         model_metrics = [metrics.PearsonR(num_targets), metrics.R2(num_targets)]
