@@ -25,6 +25,7 @@ import tensorflow as tf
 from basenji import blocks
 from basenji import layers
 from basenji import metrics
+from basenji.trainer import PoissonMultinomialNLL
 
 class SeqNN():
 
@@ -237,6 +238,7 @@ class SeqNN():
 
   def evaluate(self, seq_data, head_i=0, loss='poisson'):
     """ Evaluate model on SeqDataset. """
+    print(loss)
     # choose model
     if self.ensemble is None:
       model = self.models[head_i]
@@ -251,6 +253,11 @@ class SeqNN():
                     loss=loss,
                     metrics=[metrics.SeqAUC(curve='ROC', summarize=False),
                              metrics.SeqAUC(curve='PR', summarize=False)])
+    elif loss == 'poisson_multinomial_nll':
+      model.compile(optimizer=tf.keras.optimizers.SGD(),
+                    loss=PoissonMultinomialNLL,
+                    metrics=[metrics.PearsonRProfile(2, summarize=False),
+                             metrics.R2Profile(2, summarize=False)])
     else:      
       model.compile(optimizer=tf.keras.optimizers.SGD(),
                     loss=loss,
