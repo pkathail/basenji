@@ -201,7 +201,7 @@ class PearsonR(tf.keras.metrics.Metric):
 
 class PearsonRProfile(tf.keras.metrics.Metric):
   def __init__(self, num_targets, summarize=True, name='pearsonr', **kwargs):
-    super(PearsonR, self).__init__(name=name, **kwargs)
+    super(PearsonRProfile, self).__init__(name=name, **kwargs)
     self._summarize = summarize
     self._shape = (num_targets,)
     self._count = self.add_weight(name='count', shape=self._shape, initializer='zeros')
@@ -320,7 +320,7 @@ class R2(tf.keras.metrics.Metric):
 
 class R2Profile(tf.keras.metrics.Metric):
   def __init__(self, num_targets, summarize=True, name='r2', **kwargs):
-    super(R2, self).__init__(name=name, **kwargs)
+    super(R2Profile, self).__init__(name=name, **kwargs)
     self._summarize = summarize
     self._shape = (num_targets,)
     self._count = self.add_weight(name='count', shape=self._shape, initializer='zeros')
@@ -334,7 +334,7 @@ class R2Profile(tf.keras.metrics.Metric):
   def update_state(self, y_true, y_pred, sample_weight=None):
     y_true = tf.concat([y_true[:,:,0],K.sum(y_true[:,:,1:], axis=-1)], axis=-1)
     y_pred = tf.concat([y_pred[:,:,0],K.sum(y_pred[:,:,1:], axis=-1)], axis=-1)
-    
+
     y_true = tf.cast(y_true, 'float32')
     y_pred = tf.cast(y_pred, 'float32')
 
