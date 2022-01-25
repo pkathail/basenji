@@ -235,7 +235,7 @@ def main():
   site_coords_df.to_csv(f"{options.out_dir}/predict_regions.bed", sep="\t", header=False, index=False)
 
   # get target signal
-  bigwigAverageBedCmd = f"/clusterfs/nilah/pooja/software/bigWigAverageOverBed /clusterfs/nilah/pooja/kidney_data/211028_comb_primaryTubule_bulk/tobias/atacorrect/all_preps_merged_corrected.bw {options.out_dir}/predict_regions.bed {options.out_dir}/atac_target_signal.out"
+  bigwigAverageBedCmd = f"/clusterfs/nilah/pooja/software/bigWigAverageOverBed /clusterfs/nilah/pooja/encode_K562/raw/Dnase/ENCFF972GVB.bigWig {options.out_dir}/predict_regions.bed {options.out_dir}/atac_target_signal.out"
 
   p = subprocess.Popen(
       bigwigAverageBedCmd,
