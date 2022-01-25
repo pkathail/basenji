@@ -213,8 +213,12 @@ class PearsonRProfile(tf.keras.metrics.Metric):
     self._pred_sumsq = self.add_weight(name='pred_sumsq', shape=self._shape, initializer='zeros')
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    print(y_true.shape)
+    print(y_pred.shape)
     y_true = tf.concat([y_true[:,:,0],K.sum(y_true[:,:,1:], axis=-1)], axis=-1)
     y_pred = tf.concat([y_pred[:,:,0],K.sum(y_pred[:,:,1:], axis=-1)], axis=-1)
+    print(y_true.shape)
+    print(y_pred.shape)
 
     y_true = tf.cast(y_true, 'float32')
     y_pred = tf.cast(y_pred, 'float32')
