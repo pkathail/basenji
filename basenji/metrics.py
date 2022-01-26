@@ -337,7 +337,7 @@ class R2Profile(tf.keras.metrics.Metric):
     y_true = tf.concat([tf.expand_dims(y_true[:,:,0], axis=2),
                         K.sum(y_true[:,:,1:], axis=-1, keepdims=True)], axis=-1)
     y_pred = tf.concat([tf.expand_dims(y_pred[:,:,0], axis=2),
-                        K.sum(y_pred[:,:,1:], axis=-1, keepdims=True)], axis=-1))
+                        K.sum(y_pred[:,:,1:], axis=-1, keepdims=True)], axis=-1)
 
     y_true = tf.cast(y_true, 'float32')
     y_pred = tf.cast(y_pred, 'float32')
