@@ -23,7 +23,6 @@ from tensorflow.python.ops import math_ops
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import dtypes
 from tensorflow.python.keras import backend as K
-import tensorflow_probability as tfp
 
 from basenji import layers
 from basenji import metrics
@@ -37,7 +36,7 @@ def multinomial_nll(true_counts, logits):
     """
     counts_per_example = tf.reduce_sum(true_counts, axis=-1)
 
-    dist = tfp.distributions.Multinomial(total_count=counts_per_example,
+    dist = tf.compat.v1.distributions.Multinomial(total_count=counts_per_example,
                                                 logits=logits_perm)
 
     # Normalize by batch size. One could also normalize by
