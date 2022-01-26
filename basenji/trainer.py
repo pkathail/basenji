@@ -34,10 +34,10 @@ def multinomial_nll(true_counts, logits):
       true_counts: observed count values (batch, seqlen, channels)
       logits: predicted logit values (batch, seqlen, channels)
     """
-    print(true_counts.shape)
-    print(logits.shape)
+    print("true counts", true_counts.shape)
+    print("logits", logits.shape)
     counts_per_example = tf.reduce_sum(true_counts, axis=-1)
-    print(counts_per_example.shape)
+    print("counts_per_example", counts_per_example.shape)
 
     dist = tf.compat.v1.distributions.Multinomial(total_count=counts_per_example,
                                                 logits=logits)
@@ -46,6 +46,7 @@ def multinomial_nll(true_counts, logits):
     # sequence length here.
     batch_size = tf.cast(tf.shape(true_counts)[0], tf.float32)
 
+    print("log prob", dist.log_prob(true_counts).shape)
     return -tf.reduce_sum(dist.log_prob(true_counts)) / batch_size
 
 
@@ -76,9 +77,6 @@ class PoissonMultinomialNLL:
 
 
         return self.dnase_task_weight*dnase_loss + self.footprint_profile_task_weight*footprint_profile_loss + self.footprint_count_task_weight*footprint_count_loss
-
-    def get_config(self):
-        return {"c_task_weight": self.c_task_weight}
 
 
 class Trainer:
