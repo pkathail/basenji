@@ -33,27 +33,18 @@ def multinomial_nll(true_counts, logits):
     Args:
       true_counts: observed count values (batch, seqlen, channels)
       logits: predicted logit values (batch, seqlen, channels)
-    """
-    print("true counts", true_counts.shape)
-    print("logits", logits.shape)
-    
+    """    
     counts_per_example = tf.reduce_sum(true_counts, axis=-1)
-    print("counts_per_example", counts_per_example.shape)
-
     dist = tf.compat.v1.distributions.Multinomial(total_count=counts_per_example,
                                                 logits=logits)
 
     # Normalize by batch size. One could also normalize by
     # sequence length here.
     batch_size = tf.cast(tf.shape(true_counts)[0], tf.float32)
-
-    print("log prob", dist.log_prob(true_counts).shape)
     return -tf.reduce_sum(dist.log_prob(true_counts)) / batch_size
 
 def poisson_multinomial_nll_wrapper(dnase_task_weight=0.5, profile_task_weight=0.5):
     def poisson_multinomial_nll(y_true, y_pred):
-        print("ytrue", y_true.shape)
-        print("ypred", y_pred.shape)
         footprint_profile_task_weight = profile_task_weight*(1-dnase_task_weight)
         footprint_count_task_weight = 1 - dnase_task_weight - footprint_profile_task_weight
 
