@@ -116,7 +116,8 @@ class Trainer:
         model_metrics = [metrics.SeqAUC(curve='ROC'), metrics.SeqAUC(curve='PR')]
       elif self.loss == 'poisson_multinomial_nll':
         num_targets = 2
-        model_metrics = [metrics.PearsonRProfile(num_targets), metrics.R2Profile(num_targets)]
+        model_metrics = [metrics.PearsonRProfile(num_targets), metrics.R2Profile(num_targets), 
+                         metrics.dnase_count_loss, metrics.footprint_count_loss, metrics.footprint_profile_loss]
       else:
         num_targets = model.output_shape[-1]
         model_metrics = [metrics.PearsonR(num_targets), metrics.R2(num_targets)]

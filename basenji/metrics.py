@@ -378,3 +378,36 @@ class R2Profile(tf.keras.metrics.Metric):
 
   def reset_states(self):
     K.batch_set_value([(v, np.zeros(self._shape)) for v in self.variables])
+
+
+def dnase_count_loss(y_true, y_pred):
+  poisson_loss_fn = tf.keras.losses.Poisson()
+
+  dnase_counts = y_true[:,:,0]
+  dnase_preds = y_pred[:,:,0]
+  return poisson_loss_fn(dnase_counts, dnase_preds)
+
+
+def footprint_count_loss(y_true, y_pred):
+  poisson_loss_fn = tf.keras.losses.Poisson()
+
+  footprint_counts = y_true[:,:,1:]
+  footprint_preds = y_pred[:,:,1:]
+  return poisson_loss_fn(K.sum(footprint_counts, axis=(-2, -1)),
+                         K.sum(footprint_preds, axis=(-2, -1)))
+
+
+def footprint_profile_loss(y_true, y_pred):
+  footprint_counts = y_true[:,:,1:]
+  footprint_preds = y_pred[:,:,1:]
+  probs =  footprint_preds / K.sum(footprint_preds, axis=(-2,-1), keepdims=True)
+  logits = K.log(probs / (1 - probs))
+
+  counts_per_example = tf.reduce_sum(footprint_counts, axis=-1)
+  dist = tf.compat.v1.distributions.Multinomial(total_count=counts_per_example,
+                                                logits=logits)
+
+  # Normalize by batch size. One could also normalize by
+  # sequence length here.
+  batch_size = tf.cast(tf.shape(footprint_counts)[0], tf.float32)
+  return -tf.reduce_sum(dist.log_prob(footprint_counts)) / batch_size
