@@ -215,9 +215,9 @@ class PearsonRProfile(tf.keras.metrics.Metric):
   def update_state(self, y_true, y_pred, sample_weight=None):
     print(y_true.shape)
     print(y_pred.shape)
-    y_true = tf.concat([tf.reshape(y_true[:,:,0], (y_true.shape[0], y_true.shape[1], 1)),
+    y_true = tf.concat([tf.expand_dims(y_true[:,:,0], axis=2),
                         K.sum(y_true[:,:,1:], axis=-1, keepdims=True)], axis=-1)
-    y_pred = tf.concat([tf.reshape(y_pred[:,:,0], (y_pred.shape[0], y_pred.shape[1], 1)),
+    y_pred = tf.concat([tf.expand_dims(y_pred[:,:,0], axis=2),
                         K.sum(y_pred[:,:,1:], axis=-1, keepdims=True)], axis=-1)
     print(y_true.shape)
     print(y_pred.shape)
