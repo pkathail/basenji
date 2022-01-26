@@ -103,7 +103,7 @@ class Trainer:
     elif self.loss == 'bce':
       self.loss_fn = tf.keras.losses.BinaryCrossentropy()
     elif self.loss == 'poisson_multinomial_nll':
-      self.loss_fn = PoissonMultinomialNLL()
+      self.loss_fn = PoissonMultinomialNLL
     else:
       self.loss_fn = tf.keras.losses.Poisson()
 
