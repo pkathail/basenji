@@ -34,10 +34,13 @@ def multinomial_nll(true_counts, logits):
       true_counts: observed count values (batch, seqlen, channels)
       logits: predicted logit values (batch, seqlen, channels)
     """
+    print(true_counts.shape)
+    print(logits.shape)
     counts_per_example = tf.reduce_sum(true_counts, axis=-1)
+    print(counts_per_example.shape)
 
     dist = tf.compat.v1.distributions.Multinomial(total_count=counts_per_example,
-                                                logits=logits_perm)
+                                                logits=logits)
 
     # Normalize by batch size. One could also normalize by
     # sequence length here.
