@@ -52,17 +52,13 @@ def multinomial_nll(true_counts, logits):
     print("log prob", dist.log_prob(true_counts_perm).shape)
     return -tf.reduce_sum(dist.log_prob(true_counts_perm)) / batch_size
 
-
-class PoissonMultinomialNLL:
-
-    def __init__(self, dnase_task_weight=0.5, profile_task_weight=0.5):
-        self.dnase_task_weight = dnase_task_weight
-        self.footprint_profile_task_weight = profile_task_weight*(1-self.dnase_task_weight)
-        self.footprint_count_task_weight = 1 - self.dnase_task_weight - self.footprint_profile_task_weight
-
-    def __call__(self, y_true, y_pred, sample_weight=None):
+def poisson_multinomial_nll_wrapper(dnase_task_weight=0.5, profile_task_weight=0.5):
+    def poisson_multinomial_nll(y_true, y_pred):
         print("ytrue", y_true.shape)
         print("ypred", y_pred.shape)
+        footprint_profile_task_weight = profile_task_weight*(1-dnase_task_weight)
+        footprint_count_task_weight = 1 - dnase_task_weight - footprint_profile_task_weight
+
         poisson_loss_fn = tf.keras.losses.Poisson()
 
         dnase_counts = y_true[:,:,0]
@@ -76,12 +72,11 @@ class PoissonMultinomialNLL:
 
         probs =  footprint_preds / K.sum(footprint_preds, axis=(-2,-1), keepdims=True)
         logits = K.log(probs / (1 - probs))
-
         # multinomial loss
         footprint_profile_loss = multinomial_nll(footprint_counts, logits)
 
-
-        return self.dnase_task_weight*dnase_loss + self.footprint_profile_task_weight*footprint_profile_loss + self.footprint_count_task_weight*footprint_count_loss
+        return dnase_task_weight*dnase_loss + footprint_profile_task_weight*footprint_profile_loss + footprint_count_task_weight*footprint_count_loss
+    return poisson_multinomial_nll
 
 
 class Trainer:
@@ -103,7 +98,7 @@ class Trainer:
     elif self.loss == 'bce':
       self.loss_fn = tf.keras.losses.BinaryCrossentropy()
     elif self.loss == 'poisson_multinomial_nll':
-      self.loss_fn = PoissonMultinomialNLL
+      self.loss_fn = poisson_multinomial_nll_wrapper()
     else:
       self.loss_fn = tf.keras.losses.Poisson()
 

@@ -25,7 +25,7 @@ import tensorflow as tf
 from basenji import blocks
 from basenji import layers
 from basenji import metrics
-from basenji.trainer import PoissonMultinomialNLL
+from basenji.trainer import poisson_multinomial_nll_wrapper
 
 class SeqNN():
 
@@ -255,7 +255,7 @@ class SeqNN():
                              metrics.SeqAUC(curve='PR', summarize=False)])
     elif loss == 'poisson_multinomial_nll':
       model.compile(optimizer=tf.keras.optimizers.SGD(),
-                    loss=PoissonMultinomialNLL,
+                    loss=poisson_multinomial_nll_wrapper(),
                     metrics=[metrics.PearsonRProfile(2, summarize=False),
                              metrics.R2Profile(2, summarize=False)])
     else:      
