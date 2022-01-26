@@ -37,9 +37,7 @@ def multinomial_nll(true_counts, logits):
     print("true counts", true_counts.shape)
     print("logits", logits.shape)
     
-    true_counts_perm = tf.transpose(true_counts, (0, 2, 1))
-    print("true counts perm", true_counts_perm.shape)
-    counts_per_example = tf.reduce_sum(true_counts_perm, axis=-1)
+    counts_per_example = tf.reduce_sum(true_counts, axis=-1)
     print("counts_per_example", counts_per_example.shape)
 
     dist = tf.compat.v1.distributions.Multinomial(total_count=counts_per_example,
@@ -49,8 +47,8 @@ def multinomial_nll(true_counts, logits):
     # sequence length here.
     batch_size = tf.cast(tf.shape(true_counts)[0], tf.float32)
 
-    print("log prob", dist.log_prob(true_counts_perm).shape)
-    return -tf.reduce_sum(dist.log_prob(true_counts_perm)) / batch_size
+    print("log prob", dist.log_prob(true_counts).shape)
+    return -tf.reduce_sum(dist.log_prob(true_counts)) / batch_size
 
 def poisson_multinomial_nll_wrapper(dnase_task_weight=0.5, profile_task_weight=0.5):
     def poisson_multinomial_nll(y_true, y_pred):
