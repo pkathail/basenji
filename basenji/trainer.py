@@ -53,7 +53,7 @@ class PoissonMultinomialNLL:
         self.footprint_profile_task_weight = profile_task_weight*(1-self.dnase_task_weight)
         self.footprint_count_task_weight = 1 - self.dnase_task_weight - self.footprint_profile_task_weight
 
-    def call(self, y_true, y_pred):
+    def __call__(self, y_true, y_pred, sample_weight=None):
         poisson_loss_fn = tf.keras.losses.Poisson()
 
         dnase_counts = y_true[:,:,0]
