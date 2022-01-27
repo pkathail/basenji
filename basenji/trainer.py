@@ -43,10 +43,12 @@ def multinomial_nll(true_counts, logits):
     batch_size = tf.cast(tf.shape(true_counts)[0], tf.float32)
     return -tf.reduce_sum(dist.log_prob(true_counts)) / batch_size
 
-def poisson_multinomial_nll_wrapper(dnase_task_weight=0.5, profile_task_weight=0.5):
+def poisson_multinomial_nll_wrapper(dnase_task_weight=3, 
+                                    footprint_profile_task_weight=3, 
+                                    footprint_count_task_weight=1):
     def poisson_multinomial_nll(y_true, y_pred):
-        footprint_profile_task_weight = profile_task_weight*(1-dnase_task_weight)
-        footprint_count_task_weight = 1 - dnase_task_weight - footprint_profile_task_weight
+        # footprint_profile_task_weight = profile_task_weight*(1-dnase_task_weight)
+        # footprint_count_task_weight = 1 - dnase_task_weight - footprint_profile_task_weight
 
         poisson_loss_fn = tf.keras.losses.Poisson()
 
