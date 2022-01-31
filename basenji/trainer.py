@@ -24,8 +24,8 @@ from tensorflow.python.framework import ops
 from tensorflow.python.framework import dtypes
 from tensorflow.python.keras import backend as K
 
-import wandb
-from wandb.keras import WandbCallback
+#import wandb
+#from wandb.keras import WandbCallback
 
 from basenji import layers
 from basenji import metrics
@@ -151,15 +151,14 @@ class Trainer:
                                                      save_best_only=True, mode='max',
                                                      monitor='val_pearsonr', verbose=1)
 
-    wandb.init(project="cts-basset", entity="pkathail")
-    wandb.config = self.params
+    #wandb.init(project="cts-basset", entity="pkathail")
+    #wandb.config = self.params
 
     callbacks = [
       early_stop,
       tf.keras.callbacks.TensorBoard(self.out_dir),
       tf.keras.callbacks.ModelCheckpoint('%s/model_check.h5'%self.out_dir),
-      save_best,
-      WandbCallback()]
+      save_best]
 
     seqnn_model.model.fit(
       self.train_data[0].dataset,
