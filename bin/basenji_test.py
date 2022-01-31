@@ -129,9 +129,13 @@ def main():
   # evaluate
 
   eval_loss = params_train.get('loss', 'poisson')
+  if eval_loss == "poisson_multinomial_nll":
+    loss_params = dict(dnase_task_weight=params_train.get('dnase_task_weight', 0.5),
+                       footprint_profile_task_weight=params_train.get('footprint_profile_task_weight', 0.25),
+                       footprint_count_task_weight=params_train.get('footprint_count_task_weight', 0.25))
 
   # evaluate
-  test_loss, test_metric1, test_metric2 = seqnn_model.evaluate(eval_data, loss=eval_loss)
+  test_loss, test_metric1, test_metric2 = seqnn_model.evaluate(eval_data, loss=eval_loss, loss_params=loss_params)
 
   # print summary statistics
   print('\nTest Loss:         %7.5f' % test_loss)

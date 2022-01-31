@@ -9,7 +9,10 @@
         "momentum": 0.98,
         "patience": 3,
         "train_epochs_min": 3,
-        "train_epochs_max": 30 
+        "train_epochs_max": 30 ,
+        "dnase_task_weight": 0.5,
+        "footprint_profile_task_weight": 0.25,
+        "footprint_count_task_weight": 0.25
     },
     "model": {
         "seq_length": 1344,

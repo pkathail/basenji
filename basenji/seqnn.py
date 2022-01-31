@@ -236,7 +236,7 @@ class SeqNN():
         self.model = tf.keras.Model(inputs=sequence, outputs=predictions_slice)
 
 
-  def evaluate(self, seq_data, head_i=0, loss='poisson'):
+  def evaluate(self, seq_data, head_i=0, loss='poisson', loss_params=None):
     """ Evaluate model on SeqDataset. """
     print(loss)
     # choose model
@@ -255,7 +255,7 @@ class SeqNN():
                              metrics.SeqAUC(curve='PR', summarize=False)])
     elif loss == 'poisson_multinomial_nll':
       model.compile(optimizer=tf.keras.optimizers.SGD(),
-                    loss=poisson_multinomial_nll_wrapper(),
+                    loss=poisson_multinomial_nll_wrapper(**loss_params),
                     metrics=[metrics.PearsonRProfile(2, summarize=False),
                              metrics.R2Profile(2, summarize=False)])
     else:      

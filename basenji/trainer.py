@@ -24,6 +24,9 @@ from tensorflow.python.framework import ops
 from tensorflow.python.framework import dtypes
 from tensorflow.python.keras import backend as K
 
+import wandb
+from wandb.keras import WandbCallback
+
 from basenji import layers
 from basenji import metrics
 
@@ -43,9 +46,9 @@ def multinomial_nll(true_counts, logits):
     batch_size = tf.cast(tf.shape(true_counts)[0], tf.float32)
     return -tf.reduce_sum(dist.log_prob(true_counts)) / batch_size
 
-def poisson_multinomial_nll_wrapper(dnase_task_weight=3, 
-                                    footprint_profile_task_weight=3, 
-                                    footprint_count_task_weight=1):
+def poisson_multinomial_nll_wrapper(dnase_task_weight=0.5, 
+                                    footprint_profile_task_weight=0.25, 
+                                    footprint_count_task_weight=0.25):
     def poisson_multinomial_nll(y_true, y_pred):
         # footprint_profile_task_weight = profile_task_weight*(1-dnase_task_weight)
         # footprint_count_task_weight = 1 - dnase_task_weight - footprint_profile_task_weight
@@ -89,7 +92,9 @@ class Trainer:
     elif self.loss == 'bce':
       self.loss_fn = tf.keras.losses.BinaryCrossentropy()
     elif self.loss == 'poisson_multinomial_nll':
-      self.loss_fn = poisson_multinomial_nll_wrapper()
+      self.loss_fn = poisson_multinomial_nll_wrapper(dnase_task_weight=self.params.get('dnase_task_weight', 0.5),
+                                                     footprint_profile_task_weight=self.params.get('footprint_profile_task_weight', 0.25),
+                                                     footprint_count_task_weight=self.params.get('footprint_count_task_weight', 0.25))
     else:
       self.loss_fn = tf.keras.losses.Poisson()
 
@@ -146,11 +151,15 @@ class Trainer:
                                                      save_best_only=True, mode='max',
                                                      monitor='val_pearsonr', verbose=1)
 
+    wandb.init(project="cts-basset", entity="pkathail")
+    wandb.config = self.params
+
     callbacks = [
       early_stop,
       tf.keras.callbacks.TensorBoard(self.out_dir),
       tf.keras.callbacks.ModelCheckpoint('%s/model_check.h5'%self.out_dir),
-      save_best]
+      save_best,
+      WandbCallback()]
 
     seqnn_model.model.fit(
       self.train_data[0].dataset,
