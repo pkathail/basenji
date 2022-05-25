@@ -71,6 +71,9 @@ def main():
     params_file = args[0]
     data_dir = args[1]
 
+  if "done.txt" in options.out_dir:
+    options.out_dir = os.path.dirname(options.out_dir)
+
   if not os.path.isdir(options.out_dir):
     os.mkdir(options.out_dir)
   if params_file != '%s/params.json' % options.out_dir:
