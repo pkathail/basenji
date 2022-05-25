@@ -60,6 +60,9 @@ def main():
   parser.add_option('--tfr_eval', dest='tfr_eval_pattern',
       default=None,
       help='Evaluation TFR pattern string appended to data_dir/tfrecords for subsetting [Default: %default]')
+  parser.add_option('--float-type', dest='float_type',
+      default=16,
+      help='Float type for parsing tfrecords (16 or 32) [Default: %default]')
   (options, args) = parser.parse_args()
 
   if len(args) != 2:
@@ -85,14 +88,16 @@ def main():
     batch_size=params_train['batch_size'],
     shuffle_buffer=params_train.get('shuffle_buffer',32),
     mode=tf.estimator.ModeKeys.TRAIN,
-    tfr_pattern=options.tfr_train_pattern)
+    tfr_pattern=options.tfr_train_pattern,
+    float_type=options.float_type)
 
   # load eval data
   eval_data = dataset.SeqDataset(data_dir,
     split_label='valid',
     batch_size=params_train['batch_size'],
     mode=tf.estimator.ModeKeys.EVAL,
-    tfr_pattern=options.tfr_eval_pattern)
+    tfr_pattern=options.tfr_eval_pattern,
+    float_type=options.float_type)
 
   if params_train.get('num_gpu', 1) == 1:
     ########################################

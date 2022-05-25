@@ -84,6 +84,9 @@ def main():
   parser.add_option('--tfr', dest='tfr_pattern',
       default=None,
       help='TFR pattern string appended to data_dir/tfrecords for subsetting [Default: %default]')
+  parser.add_option('--float-type', dest='float_type',
+      default=16,
+      help='Float type for parsing tfrecords (16 or 32) [Default: %default]')
   (options, args) = parser.parse_args()
 
   if len(args) != 3:
@@ -118,7 +121,8 @@ def main():
     split_label=options.split_label,
     batch_size=params_train['batch_size'],
     mode=tf.estimator.ModeKeys.EVAL,
-    tfr_pattern=options.tfr_pattern)
+    tfr_pattern=options.tfr_pattern,
+    float_type=options.float_type)
 
   # initialize model
   seqnn_model = seqnn.SeqNN(params_model)

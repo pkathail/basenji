@@ -55,7 +55,8 @@ def file_to_records(filename):
 
 class SeqDataset:
   def __init__(self, data_dir, split_label, batch_size, shuffle_buffer=32,
-               seq_length_crop=None, mode=tf.estimator.ModeKeys.EVAL, tfr_pattern=None):
+               seq_length_crop=None, mode=tf.estimator.ModeKeys.EVAL, tfr_pattern=None,
+               float_type=16):
     """Initialize basic parameters; run compute_stats; run make_dataset."""
 
     self.data_dir = data_dir
@@ -83,6 +84,10 @@ class SeqDataset:
       self.tfr_path = '%s/tfrecords/%s' % (self.data_dir, self.tfr_pattern)
       self.compute_stats()
 
+    if float_type == 16:
+      self.float_type=tf.float16
+    else:
+      self.float_type=tf.float32
     self.make_dataset()
 
   def batches_per_epoch(self):
@@ -111,7 +116,7 @@ class SeqDataset:
         sequence = tf.cast(sequence, tf.float32)
 
       # decode targets
-      targets = tf.io.decode_raw(parsed_features[TFR_OUTPUT], tf.float32)
+      targets = tf.io.decode_raw(parsed_features[TFR_OUTPUT], self.float_type)
       if not raw:
         targets = tf.reshape(targets, [self.target_length, self.num_targets])
         targets = tf.cast(targets, tf.float32)
