@@ -82,6 +82,11 @@ def main():
   params_model = params['model']
   params_train = params['train']
 
+  # auto-restore
+  if os.path.isfile(f"{options.out_dir}/model_best.h5"):
+    options.restore = f"{options.out_dir}/model_best.h5"
+    print(f"Auto-restoring {options.out_dir}/model_best.h5")
+
   # load train data
   train_data = dataset.SeqDataset(data_dir,
     split_label='train',
