@@ -84,7 +84,7 @@ class SeqDataset:
       self.tfr_path = '%s/tfrecords/%s' % (self.data_dir, self.tfr_pattern)
       self.compute_stats()
 
-    if float_type == 16:
+    if float_type == "float16":
       self.float_type=tf.float16
     else:
       self.float_type=tf.float32

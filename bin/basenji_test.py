@@ -85,7 +85,7 @@ def main():
       default=None,
       help='TFR pattern string appended to data_dir/tfrecords for subsetting [Default: %default]')
   parser.add_option('--float-type', dest='float_type',
-      default=16,
+      default='float16',
       help='Float type for parsing tfrecords (16 or 32) [Default: %default]')
   (options, args) = parser.parse_args()
 
