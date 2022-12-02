@@ -133,6 +133,7 @@ def main():
   # evaluate
 
   eval_loss = params_train.get('loss', 'poisson')
+  loss_params = None 
   if eval_loss == "poisson_multinomial_nll":
     loss_params = dict(dnase_task_weight=params_train.get('dnase_task_weight', 0.5),
                        footprint_profile_task_weight=params_train.get('footprint_profile_task_weight', 0.25),

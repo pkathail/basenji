@@ -151,9 +151,10 @@ def main():
     seqnn_trainer.fit_keras(seqnn_model)
   else:
     seqnn_trainer.fit_tape(seqnn_model)
-
-  with open(f"{options.out_dir}/done.txt", "w") as f:
-    f.write("done") 
+  
+  if os.path.exists(f"{options.out_dir}/model_best.h5"):
+    with open(f"{options.out_dir}/done.txt", "w") as f:
+      f.write("done") 
 
 ################################################################################
 # __main__

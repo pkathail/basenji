@@ -53,11 +53,14 @@ Perform an in silico saturation mutagenesis of sequences in a BED file.
 def main():
   usage = 'usage: %prog [options] <params_file> <model_file> <bed_file>'
   parser = OptionParser(usage)
+  parser.add_option('-d', dest='mut_down',
+      default=0, type='int',
+      help='Nucleotides downstream of center sequence to mutate [Default: %default]')
   parser.add_option('-f', dest='genome_fasta',
       default=None,
       help='Genome FASTA for sequences [Default: %default]')
   parser.add_option('-l', dest='mut_len',
-      default=200, type='int',
+      default=0, type='int',
       help='Length of center sequence to mutate [Default: %default]')
   parser.add_option('-o', dest='out_dir',
       default='sat_mut', help='Output directory [Default: %default]')
@@ -79,6 +82,9 @@ def main():
   parser.add_option('-t', dest='targets_file',
       default=None, type='str',
       help='File specifying target indexes and labels in table format')
+  parser.add_option('-u', dest='mut_up',
+      default=0, type='int',
+      help='Nucleotides upstream of center sequence to mutate [Default: %default]')
   (options, args) = parser.parse_args()
 
   if len(args) == 3:
@@ -124,6 +130,13 @@ def main():
   options.shifts = [int(shift) for shift in options.shifts.split(',')]
   options.sad_stats = [sad_stat.lower() for sad_stat in options.sad_stats.split(',')]
 
+  if options.mut_up > 0 or options.mut_down > 0:
+    options.mut_len = options.mut_up + options.mut_down
+  else:
+    assert(options.mut_len > 0)
+    options.mut_up = options.mut_len // 2
+    options.mut_down = options.mut_len - options.mut_up
+
   #################################################################
   # read parameters and targets
 
@@ -167,7 +180,7 @@ def main():
 
   # determine mutation region limits
   seq_mid = params_model['seq_length'] // 2
-  mut_start = seq_mid - options.mut_len // 2
+  mut_start = seq_mid - options.mut_up
   mut_end = mut_start + options.mut_len
 
   # make sequence generator
@@ -179,7 +192,7 @@ def main():
   scores_h5_file = '%s/scores.h5' % options.out_dir
   if os.path.isfile(scores_h5_file):
     os.remove(scores_h5_file)
-  scores_h5 = h5py.File('%s/scores.h5' % options.out_dir, 'w')
+  scores_h5 = h5py.File(scores_h5_file, 'w')
   scores_h5.create_dataset('seqs', dtype='bool',
       shape=(num_seqs, options.mut_len, 4))
   for sad_stat in options.sad_stats:
@@ -187,6 +200,7 @@ def main():
         shape=(num_seqs, options.mut_len, 4, num_targets))
 
   # store mutagenesis sequence coordinates
+  """
   seqs_chr, seqs_start, _, seqs_strand = zip(*seqs_coords)
   seqs_chr = np.array(seqs_chr, dtype='S')
   seqs_start = np.array(seqs_start) + mut_start
@@ -196,13 +210,37 @@ def main():
   scores_h5.create_dataset('start', data=seqs_start)
   scores_h5.create_dataset('end', data=seqs_end)
   scores_h5.create_dataset('strand', data=seqs_strand)
+  """
+
+  # store mutagenesis sequence coordinates
+  scores_chr = []
+  scores_start = []
+  scores_end = []
+  scores_strand = []
+  for seq_chr, seq_start, seq_end, seq_strand in seqs_coords:
+    scores_chr.append(seq_chr)
+    scores_strand.append(seq_strand)
+    if seq_strand == '+':
+      score_start = seq_start + mut_start
+      score_end = score_start + options.mut_len
+    else:
+      score_end = seq_end - mut_start
+      score_start = score_end - options.mut_len
+    scores_start.append(score_start)
+    scores_end.append(score_end)
+
+  scores_h5.create_dataset('chr', data=np.array(scores_chr, dtype='S'))
+  scores_h5.create_dataset('start', data=np.array(scores_start))
+  scores_h5.create_dataset('end', data=np.array(scores_end))
+  scores_h5.create_dataset('strand', data=np.array(scores_strand, dtype='S'))
 
   preds_per_seq = 1 + 3*options.mut_len
 
   score_threads = []
   score_queue = Queue()
   for i in range(1):
-    sw = ScoreWorker(score_queue, scores_h5, options.sad_stats)
+    sw = ScoreWorker(score_queue, scores_h5, options.sad_stats,
+                     mut_start, mut_end)
     sw.start()
     score_threads.append(sw)
 
@@ -218,7 +256,7 @@ def main():
     center_end = center_start + 1
 
   # initialize predictions stream
-  preds_stream = stream.PredStreamGen(seqnn_model, seqs_gen, params['train']['batch_size'])
+  preds_stream = stream.PredStreamGen(seqnn_model, seqs_gen, params_train['batch_size'])
 
   # predictions index
   pi = 0
@@ -309,12 +347,15 @@ class PlotWorker(Thread):
 
 class ScoreWorker(Thread):
   """Compute summary statistics and write to HDF."""
-  def __init__(self, score_queue, scores_h5, sad_stats):
+  def __init__(self, score_queue, scores_h5, sad_stats, mut_start, mut_end, return_augm=False):
     Thread.__init__(self)
     self.queue = score_queue
     self.daemon = True
     self.scores_h5 = scores_h5
     self.sad_stats = sad_stats
+    self.mut_start = mut_start
+    self.mut_end = mut_end
+    self.return_augm = return_augm
 
   def run(self):
     while True:
@@ -325,16 +366,14 @@ class ScoreWorker(Thread):
         print('Writing %d' % si, flush=True)
 
         # seq_preds_sum is (1 + 3*mut_len) x (num_targets)
-        num_preds, num_targets = seq_preds_sum.shape
-
-        # reverse engineer mutagenesis position parameters
-        mut_len = (num_preds - 1) // 3
-        mut_mid = len(seq_dna) // 2
-        mut_start = mut_mid - mut_len//2
-        mut_end = mut_start + mut_len
+        if self.return_augm:
+          num_preds, num_targets, num_augm = seq_preds_sum.shape
+        else:
+          num_preds, num_targets = seq_preds_sum.shape
+        mut_len = self.mut_end - self.mut_start
 
         # one hot code mutagenized DNA
-        seq_dna_mut = seq_dna[mut_start:mut_end]
+        seq_dna_mut = seq_dna[self.mut_start:self.mut_end]
         seq_1hot_mut = dna_io.dna_1hot(seq_dna_mut)
 
         # write to HDF5
@@ -342,7 +381,10 @@ class ScoreWorker(Thread):
 
         for sad_stat in self.sad_stats:
           # initialize scores
-          seq_scores = np.zeros((mut_len, 4, num_targets), dtype='float32')
+          if self.return_augm:
+            seq_scores = np.zeros((mut_len, 4, num_targets, num_augm), dtype='float32')
+          else:
+            seq_scores = np.zeros((mut_len, 4, num_targets), dtype='float32')
 
           # summary stat
           if sad_stat == 'sum':
@@ -364,10 +406,10 @@ class ScoreWorker(Thread):
             for ni in range(4):
               if seq_1hot_mut[mi,ni]:
                 # reference score
-                seq_scores[mi,ni,:] = seq_preds_stat[0,:]
+                seq_scores[mi,ni] = seq_preds_stat[0]
               else:
                 # mutation score
-                seq_scores[mi,ni,:] = seq_preds_stat[pi,:]
+                seq_scores[mi,ni] = seq_preds_stat[pi]
                 pi += 1
 
           # normalize positions
@@ -375,7 +417,7 @@ class ScoreWorker(Thread):
             seq_scores -= seq_scores.mean(axis=1, keepdims=True)
 
           # write to HDF5
-          self.scores_h5[sad_stat][si,:,:,:] = seq_scores.astype('float16')
+          self.scores_h5[sad_stat][si] = seq_scores.astype('float16')
 
       except:
         # communicate error
