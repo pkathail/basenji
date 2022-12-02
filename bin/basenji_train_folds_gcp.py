@@ -50,6 +50,9 @@ def main():
   train_options.add_option('-k', dest='keras_fit',
       default=False, action='store_true',
       help='Train with Keras fit method [Default: %default]')
+  train_options.add_option('-m', dest='mixed_precision',
+      default=False, action='store_true',
+      help='Train with mixed precision [Default: %default]')
   train_options.add_option('-o', dest='out_dir',
       default='train_out',
       help='Output directory for test statistics [Default: %default]')
@@ -142,7 +145,7 @@ def main():
   if options.worker is None:
     for ci in range(options.crosses):
       for fi in range(options.num_folds):
-        rep_label = 'f%d-c%d' % (fi, ci)
+        rep_label = 'f%dc%d' % (fi, ci)
         vm_name = '%s-%s' % (options.vm_base, rep_label)
 
         # query VM status
@@ -161,17 +164,17 @@ def main():
 
           # create VM
           gcp_create = 'gcloud compute --project=seqnn-170614 instances create %s' % vm_name
-          gcp_create += ' --subnet=default --maintenance-policy=TERMINATE --service-account=1090276179925-compute@developer.gserviceaccount.com --scopes=https://www.googleapis.com/auth/devstorage.read_write,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append --boot-disk-size=1024gb --boot-disk-type=pd-balanced --no-shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring --reservation-affinity=any --metadata="install-nvidia-driver=True"'
+          gcp_create += ' --subnet=default --maintenance-policy=TERMINATE --service-account=1090276179925-compute@developer.gserviceaccount.com --scopes=https://www.googleapis.com/auth/devstorage.read_write,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append --boot-disk-size=3072gb --boot-disk-type=pd-balanced --no-shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring --reservation-affinity=any --metadata="install-nvidia-driver=True"'
           gcp_create += ' --machine-type=a2-highgpu-%dg' % num_gpu
           gcp_create += ' --accelerator=type=nvidia-tesla-a100,count=%d' % num_gpu
           gcp_create += ' --zone=%s' % options.zone
           gcp_create += ' --source-snapshot=%s' % options.disk_snap
           gcp_create += ' --boot-disk-device-name=%s' % vm_name
-          # print(gcp_create)
+          print(gcp_create)
           subprocess.call(gcp_create, shell=True)
 
         # scp/ssh needs time
-        time.sleep(15)
+        time.sleep(30)
 
         # copy params
         gcp_params = 'gcloud compute scp %s %s:./' % (params_file, vm_name)
@@ -201,7 +204,7 @@ def main():
 
     for ci in range(options.crosses):
       for fi in range(options.num_folds):
-        rep_label = 'f%d-c%d' % (fi, ci)
+        rep_label = 'f%dc%d' % (fi, ci)
         rep_dir = '%s/%s' % (options.out_dir, rep_label)
 
         # make rep dir
@@ -219,7 +222,7 @@ def main():
 
   for ci in range(options.crosses):
     for fi in range(options.num_folds):
-      rep_label = 'f%d-c%d' % (fi, ci)
+      rep_label = 'f%dc%d' % (fi, ci)
       rep_dir = '%s/%s' % (options.out_dir, rep_label)
       vm_name = '%s-%s' % (options.vm_base, rep_label)
 
@@ -288,7 +291,7 @@ def main():
   if not options.test_off:
     for ci in range(options.crosses):
       for fi in range(options.num_folds):
-        rep_label = 'f%d-c%d' % (fi, ci)
+        rep_label = 'f%dc%d' % (fi, ci)
         rep_dir = '%s/%s' % (options.out_dir, rep_label)
         vm_name = '%s-%s' % (options.vm_base, rep_label)
 
@@ -371,10 +374,10 @@ def main():
   #######################################################
   # conclusion
 
-  if options.worker is None:
+  if options.worker is None and not options.initialize:
     for ci in range(options.crosses):
       for fi in range(options.num_folds):
-        rep_label = 'f%d-c%d' % (fi, ci)
+        rep_label = 'f%dc%d' % (fi, ci)
         rep_dir = '%s/%s' % (options.out_dir, rep_label)
         vm_name = '%s-%s' % (options.vm_base, rep_label)
 

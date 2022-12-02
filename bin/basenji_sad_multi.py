@@ -17,6 +17,7 @@
 from optparse import OptionParser
 import glob
 import os
+import pdb
 import pickle
 import shutil
 import subprocess
@@ -43,7 +44,7 @@ def main():
 
   # sad
   parser.add_option('-f', dest='genome_fasta',
-      default='%s/data/hg19.fa' % os.environ['BASENJIDIR'],
+      default='%s/data/hg38.fa' % os.environ['BASENJIDIR'],
       help='Genome FASTA for sequences [Default: %default]')
   parser.add_option('-n', dest='norm_file',
       default=None,
@@ -81,7 +82,7 @@ def main():
       default=False, action='store_true',
       help='Run without a GPU [Default: %default]')
   parser.add_option('-e', dest='conda_env',
-      default='tf2.2-gpu',
+      default='tf2.6',
       help='Anaconda environment [Default: %default]')
   parser.add_option('--name', dest='name',
       default='sad', help='SLURM name prefix [Default: %default]')
@@ -92,7 +93,7 @@ def main():
       default=None, type='int',
       help='Number of processes, passed by multi script')
   parser.add_option('-q', dest='queue',
-      default='gtx1080ti',
+      default='geforce',
       help='SLURM queue on which to run the jobs [Default: %default]')
   parser.add_option('-r', dest='restart',
       default=False, action='store_true',
@@ -133,7 +134,7 @@ def main():
         cmd = '. /home/drk/anaconda3/etc/profile.d/conda.sh;'
         cmd += ' conda activate %s;' % options.conda_env
 
-      cmd += ' basenji_sad.py %s %s %d' % (
+      cmd += ' time basenji_sad.py %s %s %d' % (
           options_pkl_file, ' '.join(args), pi)
 
       name = '%s_p%d' % (options.name, pi)
@@ -249,14 +250,7 @@ def collect_h5(file_name, out_dir, num_procs):
 def job_completed(options, pi):
   """Check whether a specific job has generated its
      output file."""
-  if options.out_txt:
-    out_file = '%s/job%d/sad_table.txt' % (options.out_dir, pi)
-  elif options.out_zarr:
-    out_file = '%s/job%d/sad.zarr' % (options.out_dir, pi)
-  elif options.csv:
-    out_file = '%s/job%d/sad_table.csv' % (options.out_dir, pi)
-  else:
-    out_file = '%s/job%d/sad.h5' % (options.out_dir, pi)
+  out_file = '%s/job%d/sad.h5' % (options.out_dir, pi)
   return os.path.isfile(out_file) or os.path.isdir(out_file)
 
 

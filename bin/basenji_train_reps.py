@@ -72,7 +72,7 @@ def main():
   # multi
   rep_options = OptionGroup(parser, 'replication options')
   rep_options.add_option('-e', dest='conda_env',
-      default='tf2-gpu',
+      default='tf2.6',
       help='Anaconda environment [Default: %default]')
   rep_options.add_option('--name', dest='name',
       default='reps', help='SLURM name prefix [Default: %default]')
@@ -80,7 +80,7 @@ def main():
       default=None, type='int',
       help='Number of processes, passed by multi script')
   rep_options.add_option('-q', dest='queue',
-      default='gtx1080ti',
+      default='geforce',
       help='SLURM queue on which to run the jobs [Default: %default]')
   rep_options.add_option('-r', dest='restart',
       default=False, action='store_true')

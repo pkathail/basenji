@@ -47,6 +47,9 @@ def main():
   train_options.add_option('-k', dest='keras_fit',
       default=False, action='store_true',
       help='Train with Keras fit method [Default: %default]')
+  train_options.add_option('-m', dest='mixed_precision',
+      default=False, action='store_true',
+      help='Train with mixed precision [Default: %default]')
   train_options.add_option('-o', dest='out_dir',
       default='train_out',
       help='Output directory for test statistics [Default: %default]')
@@ -85,7 +88,7 @@ def main():
       default=False, action='store_true',
       help='Restart training from checkpoint [Default: %default]')
   rep_options.add_option('-e', dest='conda_env',
-      default='tf2.4',
+      default='tf28',
       help='Anaconda environment [Default: %default]')
   rep_options.add_option('-f', dest='fold_subset',
       default=None, type='int',
@@ -96,7 +99,7 @@ def main():
       default=None, type='int',
       help='Number of processes, passed by multi script')
   rep_options.add_option('-q', dest='queue',
-      default='gtx1080ti',
+      default='geforce',
       help='SLURM queue on which to run the jobs [Default: %default]')
   rep_options.add_option('-r', '--restart', dest='restart',
       default=False, action='store_true')
@@ -116,19 +119,21 @@ def main():
     params_file = os.path.abspath(args[0])
     data_dirs = [os.path.abspath(arg) for arg in args[1:]]
 
-  # read model parameters
-  with open(params_file) as params_open:
-    params = json.load(params_open)
-  params_train = params['train']
-
   #######################################################
   # prep work
   
   if not options.restart and os.path.isdir(options.out_dir):
     print('Output directory %s exists. Please remove.' % options.out_dir)
     exit(1)
-  if not os.path.isdir(options.out_dir):
-    os.mkdir(options.out_dir)
+  os.makedirs(options.out_dir, exist_ok=True)
+
+  # read model parameters
+  with open(params_file) as params_open:
+    params = json.load(params_open)
+  params_train = params['train']
+
+  # copy params into output directory
+  shutil.copy(params_file, '%s/params.json' % options.out_dir)
 
   # read data parameters
   num_data = len(data_dirs)
@@ -143,6 +148,28 @@ def main():
   if options.fold_subset is not None:
     num_folds = min(options.fold_subset, num_folds)
 
+  if options.queue == 'standard':
+    num_cpu = 8
+    num_gpu = 0
+    time_base = 36
+  else:
+    num_cpu = 2
+    num_gpu = 1
+    time_base = 16
+
+  # arrange data
+  for ci in range(options.crosses):
+    for fi in range(num_folds):
+      rep_dir = '%s/f%dc%d' % (options.out_dir, fi, ci)
+      os.makedirs(rep_dir, exist_ok=True)
+
+      # make data directories
+      for di in range(num_data):
+        rep_data_dir = '%s/data%d' % (rep_dir, di)
+        if not os.path.isdir(rep_data_dir):
+          make_rep_data(data_dirs[di], rep_data_dir, fi, ci)
+
+
   #######################################################
   # train
 
@@ -150,18 +177,17 @@ def main():
 
   for ci in range(options.crosses):
     for fi in range(num_folds):
-      rep_dir = '%s/f%d_c%d' % (options.out_dir, fi, ci)
-      if options.restart and not options.checkpoint and os.path.isdir(rep_dir):
-        print('%s found and skipped.' % rep_dir)
-      else:
-        # make rep dir
-        os.makedirs(rep_dir, exist_ok=True)
+      rep_dir = '%s/f%dc%d' % (options.out_dir, fi, ci)
 
-        # make rep data
+      train_dir = '%s/train' % rep_dir
+      if options.restart and not options.checkpoint and os.path.isdir(train_dir):
+        print('%s found and skipped.' % rep_dir)
+
+      else:
+        # collect data directories
         rep_data_dirs = []
         for di in range(num_data):
           rep_data_dirs.append('%s/data%d' % (rep_dir, di))
-          make_rep_data(data_dirs[di], rep_data_dirs[-1], fi, ci)
 
         # if options.checkpoint:
         #   os.rename('%s/train.out' % rep_dir, '%s/train1.out' % rep_dir)
@@ -185,7 +211,7 @@ def main():
                       queue=options.queue,
                       cpu=4,
                       gpu=params_train.get('num_gpu',1),
-                      mem=37000, time='60-0:0:0')
+                      mem=60000, time='60-0:0:0')
         jobs.append(j)
 
   slurm.multi_run(jobs, max_proc=options.processes, verbose=True,
@@ -200,7 +226,7 @@ def main():
   if not options.test_train_off:
     for ci in range(options.crosses):
       for fi in range(num_folds):
-        it_dir = '%s/f%d_c%d' % (options.out_dir, fi, ci)
+        it_dir = '%s/f%dc%d' % (options.out_dir, fi, ci)
 
         for di in range(num_data):
           if num_data == 1:
@@ -236,9 +262,9 @@ def main():
                             out_file='%s.out'%out_dir,
                             err_file='%s.err'%out_dir,
                             queue=options.queue,
-                            cpu=1, gpu=1,
+                            cpu=num_cpu, gpu=num_gpu,
                             mem=23000,
-                            time='8:00:00')
+                            time='%d:00:00' % (3*time_base))
             jobs.append(basenji_job)
 
 
@@ -248,7 +274,7 @@ def main():
   if not options.test_off:
     for ci in range(options.crosses):
       for fi in range(num_folds):
-        it_dir = '%s/f%d_c%d' % (options.out_dir, fi, ci)
+        it_dir = '%s/f%dc%d' % (options.out_dir, fi, ci)
 
         for di in range(num_data):
           if num_data == 1:
@@ -283,9 +309,9 @@ def main():
                             out_file='%s.out'%out_dir,
                             err_file='%s.err'%out_dir,
                             queue=options.queue,
-                            cpu=1, gpu=1,
+                            cpu=num_cpu, gpu=num_gpu,
                             mem=23000,
-                            time='4:00:00')
+                            time='%d:00:00' % time_base)
             jobs.append(basenji_job)
 
   #######################################################
@@ -294,7 +320,7 @@ def main():
   if not options.spec_off:
     for ci in range(options.crosses):
       for fi in range(num_folds):
-        it_dir = '%s/f%d_c%d' % (options.out_dir, fi, ci)
+        it_dir = '%s/f%dc%d' % (options.out_dir, fi, ci)
 
         for di in range(num_data):
           if num_data == 1:
@@ -330,13 +356,14 @@ def main():
                             out_file='%s.out'%out_dir,
                             err_file='%s.err'%out_dir,
                             queue=options.queue,
-                            cpu=1, gpu=1,
-                            mem=90000,
-                            time='6:00:00')
+                            cpu=num_cpu, gpu=num_gpu,
+                            mem=120000,
+                            time='%d:00:00' % (5*time_base))
             jobs.append(basenji_job)
         
   slurm.multi_run(jobs, max_proc=options.processes, verbose=True,
                   launch_sleep=10, update_sleep=60)
+
 
 def make_rep_data(data_dir, rep_data_dir, fi, ci): 
   # read data parameters

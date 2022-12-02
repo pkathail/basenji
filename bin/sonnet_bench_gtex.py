@@ -83,7 +83,7 @@ def main():
 
   # multi
   parser.add_option('-e', dest='conda_env',
-      default='tf2.4',
+      default='tf2.6',
       help='Anaconda environment [Default: %default]')
   parser.add_option('-g', dest='gtex_vcf_dir',
       default='/home/drk/seqnn/data/gtex_fine/susie_pip90')
@@ -97,7 +97,7 @@ def main():
       help='Number of processes, passed by multi script. \
             (Unused, but needs to appear as dummy.)')
   parser.add_option('-q', dest='queue',
-      default='gtx1080ti',
+      default='geforce',
       help='SLURM queue on which to run the jobs [Default: %default]')
   parser.add_option('-r', dest='restart',
       default=False, action='store_true',

@@ -120,7 +120,11 @@ def main():
     params = json.load(params_open)
   params_model = params['model']
   params_train = params['train']
-  
+
+  # set strand pairs
+  if 'strand_pair' in targets_df.columns:
+    params_model['strand_pair'] = [np.array(targets_df.strand_pair)]
+
   # construct eval data
   eval_data = dataset.SeqDataset(data_dir,
     split_label=options.split_label,
@@ -135,13 +139,13 @@ def main():
 
   #######################################################
   # evaluate
-
   loss_label = params_train.get('loss', 'poisson').lower()
   spec_weight = params_train.get('spec_weight', 1)
   loss_fn = trainer.parse_loss(loss_label, spec_weight=spec_weight)
   
   # evaluate
-  test_loss, test_metric1, test_metric2 = seqnn_model.evaluate(eval_data, loss=loss_fn)
+  test_loss, test_metric1, test_metric2 = seqnn_model.evaluate(eval_data,
+    loss_label=loss_label, loss_fn=loss_fn)
 
   # print summary statistics
   print('\nTest Loss:         %7.5f' % test_loss)
@@ -180,7 +184,7 @@ def main():
 
   if options.save or options.peaks or options.accuracy_indexes is not None:
     # compute predictions
-    test_preds = seqnn_model.predict(eval_data).astype('float16')
+    test_preds = seqnn_model.predict(eval_data)
 
     # read targets
     test_targets = eval_data.numpy(return_inputs=False)
@@ -195,8 +199,9 @@ def main():
 
     if options.bedgraph_indexes is not None:
       bedgraph_indexes = [int(ti) for ti in options.bedgraph_indexes.split(',')]
+      bedg_out = '%s/bedgraph' % options.out_dir
       bed.write_bedgraph(test_preds, test_targets, data_dir,
-        options.out_dir, options.split_label, bedgraph_indexes)
+        bedg_out, options.split_label, bedgraph_indexes)
 
   #######################################################
   # peak call accuracy

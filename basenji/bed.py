@@ -129,7 +129,7 @@ def write_bedgraph(test_preds, test_targets, data_dir, out_dir, split_label, bed
   with open('%s/statistics.json'%data_dir) as data_open:
     data_stats = json.load(data_open)
     pool_width = data_stats['pool_width']
-    crop_bp = data_stats['crop_bp']
+    # crop_bp = data_stats['crop_bp']
 
   # read sequence positions
   seqs_df = pd.read_csv('%s/sequences.bed'%data_dir, sep='\t',
@@ -137,7 +137,7 @@ def write_bedgraph(test_preds, test_targets, data_dir, out_dir, split_label, bed
   seqs_df = seqs_df[seqs_df.split == split_label]
 
   # initialize output directory
-  os.makedirs('%s/bedgraph' % out_dir, exist_ok=True)
+  os.makedirs(out_dir, exist_ok=True)
 
   for ti in bedgraph_indexes:
     print('Writing %d bedgraph...' % ti, end='')
@@ -148,14 +148,15 @@ def write_bedgraph(test_preds, test_targets, data_dir, out_dir, split_label, bed
     test_targets_ti = test_targets[:,:,ti]
 
     # initialize raw predictions/targets
-    preds_out = open('%s/bedgraph/preds_t%d.bedgraph' % (out_dir, ti), 'w')
-    targets_out = open('%s/bedgraph/targets_t%d.bedgraph' % (out_dir, ti), 'w')
+    preds_out = open('%s/preds_t%d.bedgraph' % (out_dir, ti), 'w')
+    targets_out = open('%s/targets_t%d.bedgraph' % (out_dir, ti), 'w')
 
     # write raw predictions/targets
     for si in range(num_seqs):
       seq_chr = seqs_df.iloc[si].chr
 
-      bin_start = seqs_df.iloc[si].start + crop_bp
+      # ignore crop for new datasets
+      bin_start = seqs_df.iloc[si].start # + crop_bp
       for bi in range(target_length):
         bin_end = bin_start + pool_width
         cols = [seq_chr, str(bin_start), str(bin_end), str(test_preds_ti[si,bi])]

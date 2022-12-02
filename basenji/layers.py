@@ -121,7 +121,6 @@ class Scale(tf.keras.layers.Layer):
     })
     return config
 
-
 class PolyReLU(tf.keras.layers.Layer):
   def __init__(self, shift=0):
     super(PolyReLU, self).__init__()
@@ -130,13 +129,6 @@ class PolyReLU(tf.keras.layers.Layer):
     x3 = tf.math.pow((x-2), 3)
     y = tf.keras.activations.relu(x3)
     return y
-
-class GELU(tf.keras.layers.Layer):
-  def __init__(self, **kwargs):
-    super(GELU, self).__init__(**kwargs)
-  def call(self, x):
-    # return tf.keras.activations.sigmoid(1.702 * x) * x
-    return tf.keras.activations.sigmoid(tf.constant(1.702) * x) * x
 
 class Softplus(tf.keras.layers.Layer):
   def __init__(self, exp_max=10000):
@@ -149,6 +141,7 @@ class Softplus(tf.keras.layers.Layer):
     config = super().get_config().copy()
     config['exp_max'] = self.exp_max
     return config
+
 
 ############################################################
 # Center ops
@@ -184,9 +177,34 @@ class CenterAverage(tf.keras.layers.Layer):
     })
     return config
 
+
+class LengthAverage(tf.keras.layers.Layer):
+  def __init__(self):
+    super(LengthAverage, self).__init__()
+
+  def call(self, x, seq):
+    # focus on nt's
+    seq = seq[...,:4]
+
+    # collapse nt axis
+    seq_pos = tf.math.reduce_sum(seq, axis=-1)
+
+    # collapse length axis
+    seq_len = tf.math.reduce_sum(seq_pos, axis=-1)
+    seq_len = tf.expand_dims(seq_len, axis=-1)
+
+    # sum across length                                                         
+    x_sum = tf.math.reduce_mean(x, axis=-2)
+
+    # divide by true sequence length                                            
+    x_avg = x_sum / seq_len
+
+    return x_avg
+
 ############################################################
 # Attention
 ############################################################
+
 def _prepend_dims(x, num_dims):
   return tf.reshape(x, shape=[1] * num_dims + x.shape)
 
@@ -378,10 +396,11 @@ class MultiheadAttention(tf.keras.layers.Layer):
                relative_position_functions=['positional_features_central_mask'],
                num_position_features=None,
                positional_dropout_rate=0,
+               content_position_bias=True,
                zero_initialize=True,
                transpose_stride=0,
                gated=False,
-               initializer=None,
+               initializer='he_normal',
                l2_scale=0):
     """Creates a MultiheadAttention module.
        Original version written by Ziga Avsec.
@@ -423,10 +442,9 @@ class MultiheadAttention(tf.keras.layers.Layer):
     else:
       self._num_position_features = num_position_features
     self._positional_dropout_rate = positional_dropout_rate
+    self._content_position_bias = content_position_bias
     self._l2_scale = l2_scale
     self._initializer = initializer
-    if self._initializer is None:
-      self._initializer = tf.keras.initializers.VarianceScaling(scale=2.0)
 
     key_proj_size = self._key_size * self._num_heads
     embedding_size = self._value_size * self._num_heads
@@ -491,9 +509,7 @@ class MultiheadAttention(tf.keras.layers.Layer):
 
   def _multihead_output(self, linear_layer, inputs):
     """Applies a standard linear to inputs and returns multihead output."""
-    
-    # output = snt.BatchApply(linear)(inputs)  # [B, T, H * KV]
-    output = linear_layer(inputs)
+    output = linear_layer(inputs) # [B, T, H * KV]
     _, seq_len, num_channels = output.shape
 
     # Split H * Channels into separate axes.
@@ -501,7 +517,6 @@ class MultiheadAttention(tf.keras.layers.Layer):
     output = tf.reshape(output, shape=[-1, seq_len, self._num_heads, num_kv_channels])
     # [B, T, H, KV] -> [B, H, T, KV]
     return tf.transpose(output, [0, 2, 1, 3])
-
 
   def call(self, inputs, training=False):
     # Initialise the projection layers.
@@ -517,30 +532,43 @@ class MultiheadAttention(tf.keras.layers.Layer):
     if self._scaling:
       q *= self._key_size**-0.5
 
-    # Project positions to form relative keys.
-    distances = tf.range(-seq_len + 1, seq_len, dtype=tf.float32)[tf.newaxis]
-    positional_encodings = positional_features(
-        positions=distances,
-        feature_size=self._num_position_features,
-        seq_length=seq_len,
-        symmetric=self._relative_position_symmetric)
-    # [1, 2T-1, Cr]
-    
-    if training:
-      positional_encodings = tf.nn.dropout(
-          positional_encodings, rate=self._positional_dropout_rate)
-
-    # [1, H, 2T-1, K]
-    r_k = self._multihead_output(self._r_k_layer, positional_encodings)
-
-    # Add shifted relative logits to content logits.
     # [B, H, T', T]
     content_logits = tf.matmul(q + self._r_w_bias, k, transpose_b=True)
-    # [B, H, T', 2T-1]
-    relative_logits = tf.matmul(q + self._r_r_bias, r_k, transpose_b=True)
-    #  [B, H, T', T]
-    relative_logits = relative_shift(relative_logits)
-    logits = content_logits + relative_logits
+
+    if self._num_position_features == 0:
+      logits = content_logits
+    else:
+      # Project positions to form relative keys.
+      distances = tf.range(-seq_len + 1, seq_len, dtype=tf.float32)[tf.newaxis]
+      positional_encodings = positional_features(
+          positions=distances,
+          feature_size=self._num_position_features,
+          seq_length=seq_len,
+          symmetric=self._relative_position_symmetric)
+      # [1, 2T-1, Cr]
+      
+      if training:
+        positional_encodings = tf.nn.dropout(
+            positional_encodings, rate=self._positional_dropout_rate)
+
+      # [1, H, 2T-1, K]
+      r_k = self._multihead_output(self._r_k_layer, positional_encodings)
+
+      # Add shifted relative logits to content logits.
+      if self._content_position_bias:
+        # [B, H, T', 2T-1]
+        relative_logits = tf.matmul(q + self._r_r_bias, r_k, transpose_b=True)
+      else:
+        # [1, H, 1, 2T-1]
+        relative_logits = tf.matmul(self._r_r_bias, r_k, transpose_b=True)
+        # [1, H, T', 2T-1]
+        relative_logits = tf.broadcast_to(relative_logits, shape=(1, self._num_heads, seq_len, 2*seq_len-1))
+
+      #  [B, H, T', T]
+      relative_logits = relative_shift(relative_logits)
+      logits = content_logits + relative_logits
+
+    # softmax across length
     weights = tf.nn.softmax(logits)
 
     # Dropout on the attention weights.
@@ -617,12 +645,12 @@ class WheezeExcite(tf.keras.layers.Layer):
 
 
 class SqueezeExcite(tf.keras.layers.Layer):
-  def __init__(self, activation='relu', additive=False, bottleneck_ratio=8,
-    batch_norm=False, bn_momentum=0.9):
+  def __init__(self, activation='relu', additive=False, bottleneck_ratio=8, 
+    norm_type=None, bn_momentum=0.9):
     super(SqueezeExcite, self).__init__()
     self.activation = activation
     self.additive = additive
-    self.batch_norm = batch_norm
+    self.norm_type = norm_type
     self.bn_momentum = bn_momentum
     self.bottleneck_ratio = bottleneck_ratio
 
@@ -645,10 +673,19 @@ class SqueezeExcite(tf.keras.layers.Layer):
     self.dense2 = tf.keras.layers.Dense(
       units=self.num_channels,
       activation=None)
-    if self.batch_norm:
-      self.bn = tf.keras.layers.BatchNormalization(
-        momentum=self.bn_momentum,
-        gamma_initializer='zeros')
+
+    # normalize
+    # if self.norm_type == 'batch-sync':
+    #   self.norm = tf.keras.layers.experimental.SyncBatchNormalization(
+    #     momentum=self.bn_momentum, gamma_initializer='zeros')
+    # elif self.norm_type == 'batch':
+    #   self.norm = tf.keras.layers.BatchNormalization(
+    #     momentum=self.bn_momentum, gamma_initializer='zeros')
+    # elif self.norm_type == 'layer':
+    #   self.norm = tf.keras.layers.LayerNormalization(
+    #     gamma_initializer='zeros')
+    # else:
+    #   self.norm = None
 
   def call(self, x):
     # activate
@@ -660,8 +697,8 @@ class SqueezeExcite(tf.keras.layers.Layer):
     # excite
     excite = self.dense1(squeeze)
     excite = self.dense2(excite)
-    if self.batch_norm:
-      excite = self.bn(excite)
+    # if self.norm is not None:
+    #   excite = self.norm(excite)
 
     # scale
     if self.one_or_two == 'one':
@@ -682,7 +719,7 @@ class SqueezeExcite(tf.keras.layers.Layer):
     config.update({
       'activation': self.activation,
       'additive': self.additive,
-      'batch_norm': self.batch_norm,
+      'norm_type': self.norm_type,
       'bn_momentum': self.bn_momentum,
       'bottleneck_ratio': self.bottleneck_ratio
     })
@@ -1050,23 +1087,46 @@ class StochasticReverseComplement(tf.keras.layers.Layer):
 
 class SwitchReverse(tf.keras.layers.Layer):
   """Reverse predictions if the inputs were reverse complemented."""
-  def __init__(self):
+  def __init__(self, strand_pair=None):
     super(SwitchReverse, self).__init__()
+    self.strand_pair = strand_pair
   def call(self, x_reverse):
     x = x_reverse[0]
     reverse = x_reverse[1]
 
     xd = len(x.shape)
-    if xd == 3:
+    if xd == 2:
+      # because we collapsed length already
+      rev_axes = []
+    elif xd == 3:
+      # length axis
       rev_axes = [1]
     elif xd == 4:
+      # 2d spatial axes
       rev_axes = [1,2]
     else:
       raise ValueError('Cannot recognize SwitchReverse input dimensions %d.' % xd)
-    
-    return tf.keras.backend.switch(reverse,
+
+    if len(rev_axes) > 0:
+      xr = tf.keras.backend.switch(reverse,
                                    tf.reverse(x, axis=rev_axes),
                                    x)
+    else:
+      xr = x
+    
+    if self.strand_pair is None:
+      xrs = xr
+    else:
+      xrs = tf.keras.backend.switch(reverse,
+                                    tf.gather(xr, self.strand_pair, axis=-1),
+                                    xr)
+    
+    return xrs
+
+  def get_config(self):
+    config = super().get_config().copy()
+    config['strand_pair'] = self.strand_pair
+    return config
 
 class SwitchReverseTriu(tf.keras.layers.Layer):
   def __init__(self, diagonal_offset):
@@ -1173,7 +1233,7 @@ class StochasticShift(tf.keras.layers.Layer):
     })
     return config
 
-def shift_sequence(seq, shift, pad_value=0.25):
+def shift_sequence(seq, shift, pad_value=0):
   """Shift a sequence left or right by shift_amount.
 
   Args:
@@ -1236,15 +1296,17 @@ def activate(current, activation, verbose=False):
   elif activation == 'polyrelu':
     current = PolyReLU()(current)
   elif activation == 'gelu':
-    current = GELU()(current)
+    current = tf.keras.activations.gelu(current, approximate=True)
   elif activation == 'sigmoid':
-    current = tf.keras.layers.Activation('sigmoid')(current)
+    current = tf.keras.activations.sigmoid(current)
   elif activation == 'tanh':
-    current = tf.keras.layers.Activation('tanh')(current)
+    current = tf.keras.activations.tanh(current)
   elif activation == 'exp':
     current = Exp()(current)
   elif activation == 'softplus':
     current = Softplus()(current)
+  elif activation == 'linear' or activation is None:
+    pass
   else:
     print('Unrecognized activation "%s"' % activation, file=sys.stderr)
     exit(1)

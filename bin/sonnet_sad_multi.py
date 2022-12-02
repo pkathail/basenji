@@ -49,7 +49,7 @@ def main():
       default=None, type='int',
       help='Slice center positions [Default: %default]')
   parser.add_option('-f', dest='genome_fasta',
-      default='%s/data/hg19.fa' % os.environ['BASENJIDIR'],
+      default='%s/data/hg38.fa' % os.environ['BASENJIDIR'],
       help='Genome FASTA for sequences [Default: %default]')
   parser.add_option('-o',dest='out_dir',
       default='sad',
@@ -74,7 +74,7 @@ def main():
 
   # multi
   parser.add_option('-e', dest='conda_env',
-      default='tf2.4',
+      default='tf2.6',
       help='Anaconda environment [Default: %default]')
   parser.add_option('--name', dest='name',
       default='sad', help='SLURM name prefix [Default: %default]')
@@ -85,7 +85,7 @@ def main():
       default=None, type='int',
       help='Number of processes, passed by multi script')
   parser.add_option('-q', dest='queue',
-      default='gtx1080ti',
+      default='geforce',
       help='SLURM queue on which to run the jobs [Default: %default]')
   parser.add_option('-r', dest='restart',
       default=False, action='store_true',

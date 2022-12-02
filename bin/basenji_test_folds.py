@@ -54,7 +54,7 @@ def main():
       default=None, type='int',
       help='Reference Dataset index [Default:%default]')
   parser.add_option('-e', dest='conda_env',
-      default='tf2.4',
+      default='tf2.6',
       help='Anaconda environment [Default: %default]')
   parser.add_option('-f', dest='fold_subset',
       default=None, type='int',
@@ -72,7 +72,7 @@ def main():
   parser.add_option('-p', dest='out_stem',
       default=None, help='Output plot stem [Default: %default]')
   parser.add_option('-q', dest='queue',
-      default='gtx1080ti')
+      default='geforce')
   parser.add_option('-r', dest='ref_dir',
       default=None, help='Reference directory for statistical tests')
   parser.add_option('--rc', dest='rc',
@@ -87,6 +87,9 @@ def main():
   parser.add_option('--spec_step', dest='spec_step',
       default=1, type='int',
       help='Positional step for specificity predict [Default: %default]')
+  parser.add_option('--status', dest='status',
+      default=False, action='store_true',
+      help='Update metric status; do not run jobs [Default: %default]')
   parser.add_option('--train', dest='train',
       default=False, action='store_true',
       help='Test on the training set, too [Default: %default]')
@@ -121,11 +124,11 @@ def main():
   if options.queue == 'standard':
     num_cpu = 8
     num_gpu = 0
-    time_base = 18
+    time_base = 36
   else:
     num_cpu = 2
     num_gpu = 1
-    time_base = 4
+    time_base = 6
   
   ################################################################
   # test check
@@ -135,7 +138,7 @@ def main():
   if options.train:
     for ci in range(options.crosses):
       for fi in range(num_folds):
-        it_dir = '%s/f%d_c%d' % (options.exp_dir, fi, ci)
+        it_dir = '%s/f%dc%d' % (options.exp_dir, fi, ci)
 
         if options.dataset_i is None:
           out_dir = '%s/test_train' % it_dir
@@ -181,7 +184,7 @@ def main():
   ################################################################
   for ci in range(options.crosses):
     for fi in range(num_folds):
-      it_dir = '%s/f%d_c%d' % (options.exp_dir, fi, ci)
+      it_dir = '%s/f%dc%d' % (options.exp_dir, fi, ci)
 
       if options.dataset_i is None:
         out_dir = '%s/test' % it_dir
@@ -227,7 +230,7 @@ def main():
   if options.specificity:
     for ci in range(options.crosses):
       for fi in range(num_folds):
-        it_dir = '%s/f%d_c%d' % (options.exp_dir, fi, ci)
+        it_dir = '%s/f%dc%d' % (options.exp_dir, fi, ci)
 
         if options.dataset_i is None:
           out_dir = '%s/test_spec' % it_dir
@@ -268,7 +271,8 @@ def main():
                           time='%d:00:00' % (3*time_base))
           jobs.append(j)
 
-  slurm.multi_run(jobs, verbose=True)
+  if not options.status:
+    slurm.multi_run(jobs, verbose=True)
 
 
   if options.dataset_i is None:
@@ -283,7 +287,7 @@ def main():
 
   # classification or regression
   if options.metric is None:
-	  with open('%s/f0_c0/%s/acc.txt' % (options.exp_dir,test_prefix)) as test0_open:
+	  with open('%s/f0c0/%s/acc.txt' % (options.exp_dir,test_prefix)) as test0_open:
 	    header = test0_open.readline().split()
 	    if 'pearsonr' in header:
 	      options.metric = 'pearsonr'
@@ -302,7 +306,7 @@ def main():
       ref_cors, ref_mean, ref_stdm = read_metrics(ref_glob_str, options.metric)
       mwp, tp = stat_tests(ref_cors, exp_cors, options.alternative)
 
-    print('\nTrain:')
+    print('\nTrain (%d reps):' % len(exp_cors))
     print('%12s %s: %.4f (%.4f)' % (options.label_exp, options.metric, exp_mean, exp_stdm))
     if options.ref_dir is not None:
       print('%12s %s: %.4f (%.4f)' % (options.label_ref, options.metric, ref_mean, ref_stdm))
@@ -327,7 +331,7 @@ def main():
 
     mwp, tp = stat_tests(ref_cors, exp_cors, options.alternative)
 
-  print('\nTest:')
+  print('\nTest (%d reps):' % len(exp_cors))
   print('%12s %s: %.4f (%.4f)' % (options.label_exp, options.metric, exp_mean, exp_stdm))
   if options.ref_dir is not None:
     print('%12s %s: %.4f (%.4f)' % (options.label_ref, options.metric, ref_mean, ref_stdm))
@@ -349,7 +353,6 @@ def main():
     if options.ref_dir is not None:
       ref_glob_str = '%s/*/%s_spec/acc.txt' % (options.ref_dir, test_ref_prefix)
       ref_cors, ref_mean, ref_stdm = read_metrics(ref_glob_str, options.metric)
-
       mwp, tp = stat_tests(ref_cors, exp_cors, options.alternative)
 
     print('\nSpecificity:')

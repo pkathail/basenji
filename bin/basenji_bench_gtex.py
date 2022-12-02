@@ -46,9 +46,6 @@ def main():
   parser.add_option('-f', dest='genome_fasta',
       default='%s/data/hg38.fa' % os.environ['BASENJIDIR'],
       help='Genome FASTA for sequences [Default: %default]')
-  parser.add_option('--local',dest='local',
-      default=1024, type='int',
-      help='Local SAD score [Default: %default]')
   parser.add_option('-n', dest='norm_file',
       default=None,
       help='Normalize SAD scores')
@@ -87,7 +84,7 @@ def main():
 
   # multi
   parser.add_option('-e', dest='conda_env',
-      default='tf2.4',
+      default='tf2.6',
       help='Anaconda environment [Default: %default]')
   parser.add_option('-g', dest='gtex_vcf_dir',
       default='/home/drk/seqnn/data/gtex_fine/susie_pip90')
@@ -101,7 +98,7 @@ def main():
       help='Number of processes, passed by multi script. \
             (Unused, but needs to appear as dummy.)')
   parser.add_option('-q', dest='queue',
-      default='gtx1080ti',
+      default='geforce',
       help='SLURM queue on which to run the jobs [Default: %default]')
   parser.add_option('-r', dest='restart',
       default=False, action='store_true',
@@ -190,20 +187,6 @@ def main():
       jobs.append(j)
 
   slurm.multi_run(jobs, verbose=True)
-
-
-def job_completed(options, pi):
-  """Check whether a specific job has generated its
-     output file."""
-  if options.out_txt:
-    out_file = '%s/job%d/sad_table.txt' % (options.out_dir, pi)
-  elif options.out_zarr:
-    out_file = '%s/job%d/sad.zarr' % (options.out_dir, pi)
-  elif options.csv:
-    out_file = '%s/job%d/sad_table.csv' % (options.out_dir, pi)
-  else:
-    out_file = '%s/job%d/sad.h5' % (options.out_dir, pi)
-  return os.path.isfile(out_file) or os.path.isdir(out_file)
 
 
 ################################################################################

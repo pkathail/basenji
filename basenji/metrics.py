@@ -7,8 +7,6 @@ from tensorflow.python.keras import backend as K
 from tensorflow.python.keras.utils import losses_utils
 from tensorflow.python.keras.losses import LossFunctionWrapper
 from tensorflow.python.keras.utils import metrics_utils
-from tensorflow.python.ops import array_ops
-from tensorflow.python.ops import math_ops
 
 ################################################################################
 # Losses
@@ -27,7 +25,7 @@ def mean_squared_error_udot(y_true, y_pred, udot_weight=1):
 
   yn_true = y_true - tf.math.reduce_mean(y_true, axis=-1, keepdims=True)
   yn_pred = y_pred - tf.math.reduce_mean(y_pred, axis=-1, keepdims=True)
-  udot_term = -math_ops.reduce_mean(yn_true * yn_pred, axis=-1)
+  udot_term = -tf.reduce_mean(yn_true * yn_pred, axis=-1)
 
   return mse_term + udot_weight*udot_term
 
@@ -64,6 +62,48 @@ class PoissonKL(LossFunctionWrapper):
     super(PoissonKL, self).__init__(
         pois_kl, name=name, reduction=reduction)
 
+
+def poisson_multinomial(y_true, y_pred, total_weight=1, epsilon=1e-6, rescale=False):
+  seq_len = y_true.shape[1]
+
+  # add epsilon to protect against tiny values
+  y_true += epsilon
+  y_pred += epsilon
+
+  # sum across lengths
+  s_true = tf.math.reduce_sum(y_true, axis=-2, keepdims=True)
+  s_pred = tf.math.reduce_sum(y_pred, axis=-2, keepdims=True)
+
+  # normalize to sum to one
+  p_pred = y_pred / s_pred
+
+  # total count poisson loss
+  poisson_term = tf.keras.losses.poisson(s_true, s_pred) # B x T
+  poisson_term /= seq_len
+
+  # multinomial loss
+  pl_pred = tf.math.log(p_pred) # B x L x T
+  multinomial_dot = -tf.math.multiply(y_true, pl_pred) # B x L x T
+  multinomial_term = tf.math.reduce_sum(multinomial_dot, axis=-2) # B x T
+  multinomial_term /= seq_len
+
+  # normalize to scale of 1:1 term ratio
+  loss_raw = multinomial_term + total_weight * poisson_term
+  if rescale:
+    loss_rescale = loss_raw*2/(1 + total_weight)
+  else:
+    loss_rescale = loss_raw
+
+  return loss_rescale
+
+class PoissonMultinomial(LossFunctionWrapper):
+  def __init__(self, total_weight=1, reduction=losses_utils.ReductionV2.AUTO, name='poisson_multinomial'):
+    self.total_weight = total_weight
+    pois_mn = lambda yt, yp: poisson_multinomial(yt, yp, self.total_weight)
+    super(PoissonMultinomial, self).__init__(
+        pois_mn, name=name, reduction=reduction)
+
+
 ################################################################################
 # Metrics
 ################################################################################
@@ -92,108 +132,114 @@ class SeqAUC(tf.keras.metrics.AUC):
 
   def interpolate_pr_auc(self):
     """Add option to remove summary."""
-    dtp = self.true_positives[:self.num_thresholds-1] - self.true_positives[1:]
-    p = self.true_positives + self.false_positives
+    dtp = self.true_positives[:self.num_thresholds -
+                              1] - self.true_positives[1:]
+    p = tf.math.add(self.true_positives, self.false_positives)
     dp = p[:self.num_thresholds - 1] - p[1:]
-    prec_slope = math_ops.div_no_nan(
-        dtp, math_ops.maximum(dp, 0), name='prec_slope')
-    intercept = self.true_positives[1:] - math_ops.multiply(prec_slope, p[1:])
+    prec_slope = tf.math.divide_no_nan(
+        dtp, tf.maximum(dp, 0), name='prec_slope')
+    intercept = self.true_positives[1:] - tf.multiply(prec_slope, p[1:])
 
-    safe_p_ratio = array_ops.where(
-        math_ops.logical_and(p[:self.num_thresholds - 1] > 0, p[1:] > 0),
-        math_ops.div_no_nan(
+    safe_p_ratio = tf.where(
+        tf.logical_and(p[:self.num_thresholds - 1] > 0, p[1:] > 0),
+        tf.math.divide_no_nan(
             p[:self.num_thresholds - 1],
-            math_ops.maximum(p[1:], 0),
+            tf.maximum(p[1:], 0),
             name='recall_relative_ratio'),
-        array_ops.ones_like(p[1:]))
+        tf.ones_like(p[1:]))
 
-    pr_auc_increment = math_ops.div_no_nan(
-        prec_slope * (dtp + intercept * math_ops.log(safe_p_ratio)),
-        math_ops.maximum(self.true_positives[1:] + self.false_negatives[1:], 0),
+    pr_auc_increment = tf.math.divide_no_nan(
+        prec_slope * (dtp + intercept * tf.math.log(safe_p_ratio)),
+        tf.maximum(self.true_positives[1:] + self.false_negatives[1:], 0),
         name='pr_auc_increment')
 
     if self.multi_label:
-      by_label_auc = math_ops.reduce_sum(
+      by_label_auc = tf.reduce_sum(
           pr_auc_increment, name=self.name + '_by_label', axis=0)
 
       if self._summarize:
         if self.label_weights is None:
           # Evenly weighted average of the label AUCs.
-          return math_ops.reduce_mean(by_label_auc, name=self.name)
+          return tf.reduce_mean(by_label_auc, name=self.name)
         else:
           # Weighted average of the label AUCs.
-          return math_ops.div_no_nan(
-              math_ops.reduce_sum(
-                  math_ops.multiply(by_label_auc, self.label_weights)),
-              math_ops.reduce_sum(self.label_weights),
+          return tf.math.divide_no_nan(
+              tf.reduce_sum(
+                  tf.multiply(by_label_auc, self.label_weights)),
+              tf.reduce_sum(self.label_weights),
               name=self.name)
       else:
         return by_label_auc
     else:
       if self._summarize:
-        return math_ops.reduce_sum(pr_auc_increment, name='interpolate_pr_auc')
+        return tf.reduce_sum(pr_auc_increment, name='interpolate_pr_auc')
       else:
         return pr_auc_increment
 
 
   def result(self):
-    """Add option to remove summary."""
-    if (self.curve == metrics_utils.AUCCurve.PR and
-        self.summation_method == metrics_utils.AUCSummationMethod.INTERPOLATION):
+    """Add option to remove summary.
+    It's not clear why, but these metrics_utils == aren't working for tf.26 on.
+    I'm hacking a solution to compare the values instead."""
+    if (self.curve.value == metrics_utils.AUCCurve.PR.value and
+        self.summation_method.value == metrics_utils.AUCSummationMethod.INTERPOLATION.value
+       ):
       # This use case is different and is handled separately.
       return self.interpolate_pr_auc()
 
     # Set `x` and `y` values for the curves based on `curve` config.
-    recall = math_ops.div_no_nan(self.true_positives,
-                                 self.true_positives + self.false_negatives)
-    if self.curve == metrics_utils.AUCCurve.ROC:
-      fp_rate = math_ops.div_no_nan(self.false_positives,
-                                    self.false_positives + self.true_negatives)
+    recall = tf.math.divide_no_nan(
+        self.true_positives,
+        tf.math.add(self.true_positives, self.false_negatives))
+    if self.curve.value == metrics_utils.AUCCurve.ROC.value:
+      fp_rate = tf.math.divide_no_nan(
+          self.false_positives,
+          tf.math.add(self.false_positives, self.true_negatives))
       x = fp_rate
       y = recall
     else:  # curve == 'PR'.
-      precision = math_ops.div_no_nan(
-          self.true_positives, self.true_positives + self.false_positives)
+      precision = tf.math.divide_no_nan(
+          self.true_positives,
+          tf.math.add(self.true_positives, self.false_positives))
       x = recall
       y = precision
 
     # Find the rectangle heights based on `summation_method`.
-    if self.summation_method == metrics_utils.AUCSummationMethod.INTERPOLATION:
+    if self.summation_method.value == metrics_utils.AUCSummationMethod.INTERPOLATION.value:
       # Note: the case ('PR', 'interpolation') has been handled above.
       heights = (y[:self.num_thresholds - 1] + y[1:]) / 2.
-    elif self.summation_method == metrics_utils.AUCSummationMethod.MINORING:
-      heights = math_ops.minimum(y[:self.num_thresholds - 1], y[1:])
+    elif self.summation_method.value == metrics_utils.AUCSummationMethod.MINORING.value:
+      heights = tf.minimum(y[:self.num_thresholds - 1], y[1:])
     else:  # self.summation_method = metrics_utils.AUCSummationMethod.MAJORING:
-      heights = math_ops.maximum(y[:self.num_thresholds - 1], y[1:])
+      heights = tf.maximum(y[:self.num_thresholds - 1], y[1:])
 
     # Sum up the areas of all the rectangles.
     if self.multi_label:
-      riemann_terms = math_ops.multiply(x[:self.num_thresholds - 1] - x[1:],
+      riemann_terms = tf.multiply(x[:self.num_thresholds - 1] - x[1:],
                                         heights)
-      by_label_auc = math_ops.reduce_sum(
+      by_label_auc = tf.reduce_sum(
           riemann_terms, name=self.name + '_by_label', axis=0)
 
       if self._summarize:
         if self.label_weights is None:
           # Unweighted average of the label AUCs.
-          return math_ops.reduce_mean(by_label_auc, name=self.name)
+          return tf.reduce_mean(by_label_auc, name=self.name)
         else:
           # Weighted average of the label AUCs.
-          return math_ops.div_no_nan(
-              math_ops.reduce_sum(
-                  math_ops.multiply(by_label_auc, self.label_weights)),
-              math_ops.reduce_sum(self.label_weights),
+          return tf.math.div_no_nan(
+              tf.reduce_sum(
+                  tf.multiply(by_label_auc, self.label_weights)),
+              tf.reduce_sum(self.label_weights),
               name=self.name)
       else:
         return by_label_auc
     else:
       if self._summarize:
-        return math_ops.reduce_sum(
-            math_ops.multiply(x[:self.num_thresholds-1] - x[1:], heights),
+        return tf.reduce_sum(
+            tf.multiply(x[:self.num_thresholds-1] - x[1:], heights),
             name=self.name)
       else:
-        return math_ops.multiply(x[:self.num_thresholds-1] - x[1:], heights)
-
+        return tf.multiply(x[:self.num_thresholds-1] - x[1:], heights)
 
 
 class PearsonR(tf.keras.metrics.Metric):
@@ -263,7 +309,7 @@ class PearsonR(tf.keras.metrics.Metric):
     else:
         return correlation
 
-  def reset_states(self):
+  def reset_state(self):
       K.batch_set_value([(v, np.zeros(self._shape)) for v in self.variables])
 
 
@@ -323,5 +369,5 @@ class R2(tf.keras.metrics.Metric):
     else:
         return r2
 
-  def reset_states(self):
+  def reset_state(self):
     K.batch_set_value([(v, np.zeros(self._shape)) for v in self.variables])

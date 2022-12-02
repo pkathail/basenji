@@ -7,6 +7,7 @@ import pdb
 import h5py
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import RidgeClassifier
 from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.model_selection import KFold
 
@@ -200,7 +201,7 @@ def randfor_full(X, y, min_samples_leaf=1, random_state=None, n_jobs=1):
     return model
 
 
-def randfor_roc(X, y, folds=8, iterations=1, 
+def randfor_roc(X, y, folds=8, iterations=1, n_estimators=100,
     min_samples_leaf=1, random_state=None, n_jobs=1):
     """Compute ROC using a random forest."""
     aurocs = []
@@ -225,7 +226,7 @@ def randfor_roc(X, y, folds=8, iterations=1,
                 rs_rf = None
             else:
                 rs_rf = rs_iter+test_index[0]
-            model = RandomForestClassifier(n_estimators=100, max_features='log2', max_depth=64,
+            model = RandomForestClassifier(n_estimators=n_estimators, max_features='log2', max_depth=64,
                                            min_samples_leaf=min_samples_leaf, min_samples_split=2,
                                            random_state=rs_rf, n_jobs=n_jobs)
             model.fit(X[train_index,:], y[train_index])
@@ -259,10 +260,70 @@ def randfor_roc(X, y, folds=8, iterations=1,
 
     return aurocs, fpr_folds, tpr_folds, fpr_mean, tpr_mean, preds_return
 
+def ridge_roc(X, y, folds=8, iterations=1, alpha=1, random_state=None):
+    """Compute ROC using a random forest."""
+    aurocs = []
+    fpr_folds = []
+    tpr_folds = []
+    fpr_fulls = []
+    tpr_fulls = []
+    preds_return = []
+
+    fpr_mean = np.linspace(0, 1, 256)
+    tpr_mean = []
+
+    for i in range(iterations):
+        rs_iter = random_state + i
+        preds_full = np.zeros(y.shape)
+
+        kf = KFold(n_splits=folds, shuffle=True, random_state=rs_iter)
+
+        for train_index, test_index in kf.split(X):
+            # fit model
+            if random_state is None:
+                rs_rf = None
+            else:
+                rs_rf = rs_iter+test_index[0]
+            model = RidgeClassifier(alpha=alpha, random_state=rs_rf)
+            model.fit(X[train_index,:], y[train_index])
+
+            # predict test set
+            preds = model._predict_proba_lr(X[test_index,:])[:,1]
+
+            # save
+            preds_full[test_index] = preds.squeeze()
+
+            # compute ROC curve
+            fpr, tpr, _ = roc_curve(y[test_index], preds)
+            fpr_folds.append(fpr)
+            tpr_folds.append(tpr)
+
+            interp_tpr = np.interp(fpr_mean, fpr, tpr)
+            interp_tpr[0] = 0.0
+            tpr_mean.append(interp_tpr)
+
+            # compute AUROC
+            aurocs.append(roc_auc_score(y[test_index], preds))
+
+        fpr_full, tpr_full, _ = roc_curve(y, preds_full)
+        fpr_fulls.append(fpr_full)
+        tpr_fulls.append(tpr_full)
+        preds_return.append(preds_full)
+
+    aurocs = np.array(aurocs)
+    tpr_mean = np.array(tpr_mean).mean(axis=0)
+    preds_return = np.array(preds_return).T
+
+    return aurocs, fpr_folds, tpr_folds, fpr_mean, tpr_mean, preds_return
+
 def read_indel(sad_file, indel_abs=True, indel_bool=False):
     with h5py.File(sad_file, 'r') as sad_open:
-        ref_alleles = [ra.decode('UTF-8') for ra in sad_open['ref_allele']]
-        alt_alleles = [aa.decode('UTF-8') for aa in sad_open['alt_allele']]
+        try:
+            ref_alleles = [ra.decode('UTF-8') for ra in sad_open['ref_allele']]
+            alt_alleles = [aa.decode('UTF-8') for aa in sad_open['alt_allele']]
+        except KeyError:
+            ref_alleles = [ra.decode('UTF-8') for ra in sad_open['ref']]
+            alt_alleles = [aa.decode('UTF-8') for aa in sad_open['alt']]
     num_variants = len(ref_alleles)
     indels = np.array([len(ref_alleles[vi])-len(alt_alleles[vi]) for vi in range(num_variants)])
     if indel_abs:

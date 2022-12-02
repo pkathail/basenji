@@ -67,12 +67,12 @@ def main():
 
   fold_options = OptionGroup(parser, 'cross-fold options')
   fold_options.add_option('--env', dest='conda_env',
-      default='tf2.4',
+      default='tf2.6',
       help='Anaconda environment [Default: %default]')
   fold_options.add_option('--name', dest='name',
       default='inject', help='SLURM name prefix [Default: %default]')
   fold_options.add_option('-q', dest='queue',
-      default='gtx1080ti',
+      default='geforce',
       help='SLURM queue on which to run the jobs [Default: %default]')
   parser.add_option_group(fold_options)
 

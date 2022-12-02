@@ -19,6 +19,11 @@ import pdb
 
 import numpy as np
 import tensorflow as tf
+try:
+  import tensorflow_addons as tfa
+except ImportError:
+  pass
+from tensorflow.keras import mixed_precision
 from tensorflow.python.ops import math_ops
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import dtypes
@@ -26,13 +31,16 @@ from tensorflow.python.framework import dtypes
 from basenji import layers
 from basenji import metrics
 
-def parse_loss(loss_label, strategy=None, keras_fit=True, spec_weight=1):
+def parse_loss(loss_label, strategy=None, keras_fit=True, spec_weight=1, total_weight=1):
   """Parse loss function from label, strategy, and fitting method."""
   if strategy is not None and not keras_fit:
     if loss_label == 'mse':
       loss_fn = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.NONE)
     elif loss_label == 'bce':
       loss_fn = tf.keras.losses.BinaryCrossentropy(reduction=tf.keras.losses.Reduction.NONE)
+    elif loss_label == 'poisson_mn':
+      loss_fn = metrics.PoissonMultinomial(total_weight,
+        reduction=tf.keras.losses.Reduction.NONE)
     else:
       loss_fn = tf.keras.losses.Poisson(reduction=tf.keras.losses.Reduction.NONE)
   else:
@@ -44,6 +52,8 @@ def parse_loss(loss_label, strategy=None, keras_fit=True, spec_weight=1):
       loss_fn = tf.keras.losses.BinaryCrossentropy()
     elif loss_label == 'poisson_kl':
       loss_fn = metrics.PoissonKL(spec_weight)
+    elif loss_label == 'poisson_mn':
+      loss_fn = metrics.PoissonMultinomial(total_weight)
     else:
       loss_fn = tf.keras.losses.Poisson()
 
@@ -83,8 +93,9 @@ class Trainer:
 
     # loss
     self.spec_weight = self.params.get('spec_weight', 1)
+    self.total_weight = self.params.get('total_weight', 1)
     self.loss = self.params.get('loss','poisson').lower()
-    self.loss_fn = parse_loss(self.loss, self.strategy, keras_fit, self.spec_weight)
+    self.loss_fn = parse_loss(self.loss, self.strategy, keras_fit, self.spec_weight, self.total_weight)
 
     # optimizer
     self.make_optimizer()
@@ -270,11 +281,15 @@ class Trainer:
         ckpt.restore(manager.latest_checkpoint)
         ckpt_end = 5+manager.latest_checkpoint.find('ckpt-')
         epoch_start = int(manager.latest_checkpoint[ckpt_end:])
+        if self.strategy is None:
+          opt_iters = self.optimizer.iterations
+        else:
+          opt_iters = self.optimizer.iterations.values[0]
         print('Checkpoint restored at epoch %d, optimizer iteration %d.' % \
-          (epoch_start, self.optimizer.iterations))
+            (epoch_start, opt_iters))
       else:
         print('No checkpoints found.')
-      epoch_start = 0
+        epoch_start = 0
       managers.append(manager)
 
     # improvement variables
@@ -284,7 +299,8 @@ class Trainer:
     ################################################################
     # training loop
 
-    for ei in range(self.train_epochs_max):
+    first_step = True
+    for ei in range(epoch_start, self.train_epochs_max):
       if ei >= self.train_epochs_min and np.min(unimproved) > self.patience:
         break
       else:
@@ -308,7 +324,10 @@ class Trainer:
               train_step0_distr(x, y)
             else:
               train_step1_distr(x, y)
-
+          if first_step:
+            print('Successful first step!', flush=True)
+            first_step = False
+            
         print('Epoch %d - %ds' % (ei, (time.time()-t0)))
         for di in range(self.num_datasets):
           print('  Data %d' % di, end='')
@@ -387,6 +406,8 @@ class Trainer:
         train_r(y, pred)
         train_r2(y, pred)
         gradients = tape.gradient(loss, model.trainable_variables)
+        if self.agc_clip is not None:
+          gradients = adaptive_clip_grad(model.trainable_variables, gradients, self.agc_clip)
         self.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
       @tf.function
@@ -437,9 +458,12 @@ class Trainer:
       ckpt.restore(manager.latest_checkpoint)
       ckpt_end = 5+manager.latest_checkpoint.find('ckpt-')
       epoch_start = int(manager.latest_checkpoint[ckpt_end:])
+      if self.strategy is None:
+        opt_iters = self.optimizer.iterations
+      else:
+        opt_iters = self.optimizer.iterations.values[0]
       print('Checkpoint restored at epoch %d, optimizer iteration %d.' % \
-        (epoch_start, self.optimizer.iterations))
-
+          (epoch_start, opt_iters))
     else:
       print('No checkpoints found.')
       epoch_start = 0
@@ -462,6 +486,8 @@ class Trainer:
             train_step_distr(x, y)
           else:
             train_step(x, y)
+          if ei == epoch_start and si == 0:
+            print('Successful first step!', flush=True)
 
         # evaluate
         for x, y in self.eval_data[0].dataset:
@@ -489,10 +515,11 @@ class Trainer:
         seqnn_model.save('%s/model_check.h5'%self.out_dir)
 
         # check best
-        if valid_r_epoch > valid_best:
+        valid_best_epoch = valid_r_epoch + valid_r2_epoch/4
+        if valid_best_epoch > valid_best:
           print(' - best!', end='')
           unimproved = 0
-          valid_best = valid_r_epoch
+          valid_best = valid_best_epoch
           seqnn_model.save('%s/model_best.h5'%self.out_dir)
         else:
           unimproved += 1
@@ -549,11 +576,24 @@ class Trainer:
       clip_norm = self.params['clipnorm']
     else:
       clip_norm = clip_norm_default
+
+    # adaptive gradient clipping handled in fit method
+    self.agc_clip = self.params.get('agc_clip', None)
   
     # optimizer
     optimizer_type = self.params.get('optimizer', 'sgd').lower()
     if optimizer_type == 'adam':
       self.optimizer = tf.keras.optimizers.Adam(
+          learning_rate=lr_schedule,
+          beta_1=self.params.get('adam_beta1',0.9),
+          beta_2=self.params.get('adam_beta2',0.999),
+          clipnorm=clip_norm,
+          global_clipnorm=global_clipnorm,
+          amsgrad=False) # reduces performance in my experience
+
+    elif optimizer_type == 'adamw':
+      self.optimizer = tfa.optimizers.AdamW(
+          weight_decay=self.params.get('weight_decay',0),
           learning_rate=lr_schedule,
           beta_1=self.params.get('adam_beta1',0.9),
           beta_2=self.params.get('adam_beta2',0.999),
@@ -571,6 +611,40 @@ class Trainer:
     else:
       print('Cannot recognize optimization algorithm %s' % optimizer_type)
       exit(1)
+
+
+################################################################
+# AGC
+# https://github.com/sayakpaul/Adaptive-Gradient-Clipping
+
+def compute_norm(x, axis, keepdims):
+  return tf.math.reduce_sum(x ** 2, axis=axis, keepdims=keepdims) ** 0.5
+
+def unitwise_norm(x):
+  if len(x.get_shape()) <= 1:  # Scalars and vectors
+    axis = None
+    keepdims = False
+  elif len(x.get_shape()) in [2, 3]:  # Linear layers of shape IO or multihead linear
+    axis = 0
+    keepdims = True
+  elif len(x.get_shape()) == 4:  # Conv kernels of shape HWIO
+    axis = [0, 1, 2,]
+    keepdims = True
+  else:
+    raise ValueError(f"Got a parameter with shape not in [1, 2, 4]! {x}")
+  return compute_norm(x, axis, keepdims)
+
+def adaptive_clip_grad(parameters, gradients, clip_factor=0.1, eps=1e-3):
+  new_grads = []
+  for (params, grads) in zip(parameters, gradients):
+    p_norm = unitwise_norm(params)
+    max_norm = tf.math.maximum(p_norm, eps) * clip_factor
+    grad_norm = unitwise_norm(grads)
+    clipped_grad = grads * (max_norm / tf.math.maximum(grad_norm, 1e-6))
+    new_grad = tf.where(grad_norm < max_norm, grads, clipped_grad)
+    new_grads.append(new_grad)
+  return new_grads
+
 
 class EarlyStoppingMin(tf.keras.callbacks.EarlyStopping):
   """Stop training when a monitored quantity has stopped improving.
@@ -600,6 +674,7 @@ class EarlyStoppingMin(tf.keras.callbacks.EarlyStopping):
           if self.verbose > 0:
             print('Restoring model weights from the end of the best epoch.')
           self.model.set_weights(self.best_weights)
+
 
 class Cyclical1LearningRate(tf.keras.optimizers.schedules.LearningRateSchedule):
   """A LearningRateSchedule that uses cyclical schedule.
@@ -716,7 +791,7 @@ def safe_next(data_iter, retry=5, sleep=10):
   while d is None and attempts < retry:
     try:
       d = next(data_iter)
-    except tf.python.framework.errors_impl.AbortedError:
+    except tf.errors.AbortedError:
       print('AbortedError, which has previously indicated NFS daemon restart.', file=sys.stderr)
       time.sleep(sleep)
     attempts += 1
