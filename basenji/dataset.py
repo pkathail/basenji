@@ -32,11 +32,12 @@ def file_to_records(filename):
 
 
 class SeqDataset:
-  def __init__(self, data_dir, split_label, batch_size, shuffle_buffer=128,
+  def __init__(self, data_dir, stats_dir, split_label, batch_size, shuffle_buffer=128,
                seq_length_crop=None, mode='eval', tfr_pattern=None):
     """Initialize basic parameters; run compute_stats; run make_dataset."""
 
     self.data_dir = data_dir
+    self.stats_dir = stats_dir 
     self.split_label = split_label
     self.batch_size = batch_size
     self.shuffle_buffer = shuffle_buffer
@@ -45,7 +46,7 @@ class SeqDataset:
     self.tfr_pattern = tfr_pattern
 
     # read data parameters
-    data_stats_file = '%s/statistics.json' % self.data_dir
+    data_stats_file = '%s/statistics.json' % self.stats_dir
     with open(data_stats_file) as data_stats_open:
       data_stats = json.load(data_stats_open)
     self.seq_length = data_stats['seq_length']

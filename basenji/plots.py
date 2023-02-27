@@ -159,7 +159,9 @@ def regplot(vals1,
             figsize=(6, 6),
             sample=None,
             table=False,
-            tight=False):
+            tight=False,
+            fit_reg=True,
+            x_y_line=False):
 
   if table:
     out_txt = '%s.txt' % out_pdf[:-4]
@@ -176,22 +178,28 @@ def regplot(vals1,
   plt.figure(figsize=figsize)
 
   gold = sns.color_palette('husl', 8)[1]
-
+  
   if colors is None:
     ax = sns.regplot(vals1, vals2, color='black',
         order=poly_order,
         scatter_kws={'color': 'black',
                      's': point_size,
-                     'alpha': alpha},
-        line_kws={'color': gold})
+                     'alpha': alpha,
+                     'zorder': 10},
+        line_kws={'color': gold},
+        fit_reg=fit_reg)
   else:
     plt.scatter(vals1, vals2, c=colors,
-        s=point_size, alpha=alpha, cmap='RdBu')
+        s=point_size, alpha=alpha, cmap='RdBu', zorder=10)
     plt.colorbar()
     ax = sns.regplot(vals1, vals2,
         scatter=False, order=poly_order,
-        line_kws={'color':gold})
-
+        line_kws={'color':gold},
+        fit_reg=fit_reg)
+  
+  if x_y_line:
+    ax.axline((0, 0), slope=1, color="black", zorder=-1) 
+  
   if square:
     xmin, xmax = scatter_lims(vals1, vals2)
     ymin, ymax = xmin, xmax
