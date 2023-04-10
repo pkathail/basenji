@@ -23,11 +23,10 @@ import sys
 from natsort import natsorted
 import numpy as np
 import pandas as pd
-from scipy.stats import wilcoxon, ttest_rel
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 import slurm
+from basenji_test_folds import jointplot, stat_tests
+
 
 """
 basenji_test_folds.py
@@ -41,6 +40,20 @@ Train Basenji model replicates using given parameters and data.
 def main():
   usage = 'usage: %prog [options] <params_file> <data1_dir> ...'
   parser = OptionParser(usage)
+
+  # test genes
+  parser.add_option('--rc', dest='rc',
+      default=False, action='store_true',
+      help='Average forward and reverse complement predictions [Default: %default]')
+  parser.add_option('--shifts', dest='shifts',
+      default='0', type='str',
+      help='Ensemble prediction shifts [Default: %default]')
+  parser.add_option('-t', dest='targets_file',
+      default=None, type='str',
+      help='File specifying target indexes and labels in table format')
+
+
+  # folds
   parser.add_option('-a', '--alt', dest='alternative',
       default='two-sided', help='Statistical test alternative [Default: %default]')
   parser.add_option('-c', dest='crosses',
@@ -74,17 +87,15 @@ def main():
       default=None, help='Output plot stem [Default: %default]')
   parser.add_option('-q', dest='queue',
       default='geforce')
+  parser.add_option('-s', dest='sub_dir',
+      default='testg',
+      help='Output subdirectory within the fold directories [Default: %default]')
   parser.add_option('-r', dest='ref_dir',
       default=None, help='Reference directory for statistical tests')
-  parser.add_option('--rc', dest='rc',
-      default=False, action='store_true',
-      help='Average forward and reverse complement predictions [Default: %default]')
-  parser.add_option('--shifts', dest='shifts',
-      default='0', type='str',
-      help='Ensemble prediction shifts [Default: %default]')
   parser.add_option('--status', dest='status',
       default=False, action='store_true',
       help='Update metric status; do not run jobs [Default: %default]')
+  
   (options, args) = parser.parse_args()
 
   if len(args) < 2:
@@ -130,10 +141,10 @@ def main():
       it_dir = '%s/f%dc%d' % (options.exp_dir, fi, ci)
 
       if options.dataset_i is None:
-        out_dir = '%s/testg' % it_dir
+        out_dir = '%s/%s' % (it_dir, options.sub_dir)
         model_file = '%s/train/model_best.h5' % it_dir
       else:
-        out_dir = '%s/testg%d' % (it_dir, options.dataset_i)
+        out_dir = '%s/%s-%d' % (it_dir, options.sub_dir, options.dataset_i)
         model_file = '%s/train/model%d_best.h5' % (it_dir, options.dataset_i)
 
       # check if done
@@ -152,6 +163,8 @@ def main():
           cmd += ' --rc'
         if options.shifts:
           cmd += ' --shifts %s' % options.shifts
+        if options.targets_file is not None:
+          cmd += ' -t %s' % options.targets_file
         cmd += ' %s' % params_file
         cmd += ' %s' % model_file
         cmd += ' %s/data%d' % (it_dir, head_i)
@@ -171,14 +184,14 @@ def main():
   slurm.multi_run(jobs, verbose=True)
 
   if options.dataset_i is None:
-    test_prefix = 'testg'
+    test_prefix = options.sub_dir
   else:
-    test_prefix = 'testg%d' % options.dataset_i
+    test_prefix = '%s-%d' % (options.sub_dir, options.dataset_i)
 
   if options.dataset_ref_i is None:
-    test_ref_prefix = 'testg'
+    test_ref_prefix = options.sub_dir
   else:
-    test_ref_prefix = 'testg%d' % options.dataset_ref_i
+    test_ref_prefix = '%s-%d' % (options.sub_dir, options.dataset_ref_i)
 
 
   ################################################################
@@ -206,30 +219,6 @@ def main():
           options.label_ref, options.label_exp)
 
 
-def jointplot(ref_cors, exp_cors, out_pdf, label1, label2):
-  vmin = min(np.min(ref_cors), np.min(exp_cors))
-  vmax = max(np.max(ref_cors), np.max(exp_cors))
-  vspan = vmax - vmin
-  vbuf = vspan * 0.1
-  vmin -= vbuf
-  vmax += vbuf
-
-  g = sns.jointplot(ref_cors, exp_cors, space=0)
-
-  eps = 0.05
-  g.ax_joint.text(1-eps, eps, 'Mean: %.4f' % np.mean(ref_cors),
-    horizontalalignment='right', transform=g.ax_joint.transAxes)
-  g.ax_joint.text(eps, 1-eps, 'Mean: %.4f' % np.mean(exp_cors),
-    verticalalignment='top', transform=g.ax_joint.transAxes)
-
-  g.ax_joint.plot([vmin,vmax], [vmin,vmax], linestyle='--', color='orange')
-  g.ax_joint.set_xlabel(label1)
-  g.ax_joint.set_ylabel(label2)
-  
-  plt.tight_layout(w_pad=0, h_pad=0)
-  plt.savefig(out_pdf)
-
-
 def read_metrics(acc_glob_str, metric='pearsonr'):
   rep_cors = []
   acc_files = natsorted(glob.glob(acc_glob_str))
@@ -241,28 +230,6 @@ def read_metrics(acc_glob_str, metric='pearsonr'):
 
   return rep_cors, cors_mean, cors_stdm
 
-
-def stat_tests(ref_cors, exp_cors, alternative):
-  # hack for the common situtation where I have more reference
-  # crosses than experiment crosses
-  if len(ref_cors) == 2*len(exp_cors):
-    ref_cors = [ref_cors[i] for i in range(len(ref_cors)) if i % 2 == 0]
-
-  _, mwp = wilcoxon(exp_cors, ref_cors, alternative=alternative)
-  tt, tp = ttest_rel(exp_cors, ref_cors)
-
-  if alternative == 'less':
-    if tt <= 0:
-      tp /= 2
-    else:
-      tp = 1 - (1-tp)/2
-  elif alternative == 'greater':
-    if tt >= 0:
-      tp /= 2
-    else:
-      tp = 1 - (1-tp)/2
-
-  return mwp, tp
 
 ################################################################################
 # __main__

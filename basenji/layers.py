@@ -204,6 +204,32 @@ class LengthAverage(tf.keras.layers.Layer):
 ############################################################
 # Attention
 ############################################################
+def rope(x, axis):
+  """RoPE position embedding.
+     From Hua et al. Transformer Quality in Linear Time."""
+  shape = x.shape.as_list()
+  if isinstance(axis, int):
+    axis = [axis]
+
+  spatial_shape = [shape[i] for i in axis]
+  total_len = 1
+  for i in spatial_shape:
+    total_len *= i
+  position = tf.reshape(
+    tf.cast(tf.range(total_len, delta=1.0), tf.float32), spatial_shape)
+
+  for i in range(axis[-1]+1, len(shape)-1, 1):
+    position = tf.expand_dims(position, axis=-1)
+
+  half_size = shape[-1] // 2
+  freq_seq = tf.cast(tf.range(half_size), tf.float32) / float(half_size)
+  inv_freq = 10000 ** -freq_seq
+  sinusoid = tf.einsum('...,d->...d', position, inv_freq)
+  sin = tf.sin(sinusoid)
+  cos = tf.cos(sinusoid)
+  x1, x2 = tf.split(x, 2, axis=-1)
+
+  return tf.concat([x1*cos - x2*sin, x2*cos + x1*sin], axis=-1)
 
 def _prepend_dims(x, num_dims):
   return tf.reshape(x, shape=[1] * num_dims + x.shape)
@@ -401,7 +427,8 @@ class MultiheadAttention(tf.keras.layers.Layer):
                transpose_stride=0,
                gated=False,
                initializer='he_normal',
-               l2_scale=0):
+               l2_scale=0,
+               qkv_width=1):
     """Creates a MultiheadAttention module.
        Original version written by Ziga Avsec.
 
@@ -449,24 +476,59 @@ class MultiheadAttention(tf.keras.layers.Layer):
     key_proj_size = self._key_size * self._num_heads
     embedding_size = self._value_size * self._num_heads
 
-    self._q_layer = tf.keras.layers.Dense(
+    if qkv_width == 1:
+      # standard dense layers
+      self._q_layer = tf.keras.layers.Dense(
         key_proj_size,
         name='q_layer',
         use_bias=False,
         kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
         kernel_initializer=self._initializer)
-    self._k_layer = tf.keras.layers.Dense(
+      self._k_layer = tf.keras.layers.Dense(
         key_proj_size,
         name='k_layer',
         use_bias=False,
         kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
         kernel_initializer=self._initializer)
-    self._v_layer = tf.keras.layers.Dense(
+      self._v_layer = tf.keras.layers.Dense(
         embedding_size,
         name='v_layer',
         use_bias=False,
         kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
         kernel_initializer=self._initializer)
+    else:
+      # CvT separable convolutions
+      self._q_layer = tf.keras.layers.SeparableConv1D(
+        key_proj_size,
+        kernel_size=qkv_width,
+        padding='same',
+        name='q_layer',
+        use_bias=False,
+        depthwise_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        pointwise_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        depthwise_initializer=self._initializer,
+        pointwise_initializer=self._initializer)
+      self._k_layer = tf.keras.layers.SeparableConv1D(
+        key_proj_size,
+        kernel_size=qkv_width,
+        padding='same',
+        name='k_layer',
+        use_bias=False,
+        depthwise_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        pointwise_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        depthwise_initializer=self._initializer,
+        pointwise_initializer=self._initializer)
+      self._v_layer = tf.keras.layers.SeparableConv1D(
+        embedding_size,
+        kernel_size=qkv_width,
+        padding='same',
+        name='v_layer',
+        use_bias=False,
+        depthwise_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        pointwise_regularizer=tf.keras.regularizers.l2(self._l2_scale),
+        depthwise_initializer=self._initializer,
+        pointwise_initializer=self._initializer)
+
     if self._gated:
       self._gate_layer = tf.keras.layers.Dense(
           embedding_size,

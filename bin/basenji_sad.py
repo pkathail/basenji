@@ -20,22 +20,22 @@ import json
 import pdb
 import pickle
 import os
-from queue import Queue
 import sys
-from threading import Thread
 import time
 
 import h5py
 import numpy as np
 import pandas as pd
 import pysam
+from scipy.sparse import dok_matrix
+from scipy.special import rel_entr
 import tensorflow as tf
-if tf.__version__[0] == '1':
-  tf.compat.v1.enable_eager_execution()
+from tqdm import tqdm
 
 from basenji import seqnn
 from basenji import stream
 from basenji import vcf as bvcf
+from borzoi_sed import targets_prep_strand
 
 '''
 basenji_sad.py
@@ -51,18 +51,12 @@ def main():
   parser.add_option('-f', dest='genome_fasta',
       default='%s/data/hg38.fa' % os.environ['BASENJIDIR'],
       help='Genome FASTA for sequences [Default: %default]')
-  parser.add_option('-n', dest='norm_file',
-      default=None,
-      help='Normalize SAD scores')
   parser.add_option('-o',dest='out_dir',
       default='sad',
       help='Output directory for tables and plots [Default: %default]')
   parser.add_option('-p', dest='processes',
       default=None, type='int',
       help='Number of processes, passed by multi script')
-  parser.add_option('--pseudo', dest='log_pseudo',
-      default=1, type='float',
-      help='Log2 pseudocount [Default: %default]')
   parser.add_option('--rc', dest='rc',
       default=False, action='store_true',
       help='Average forward and reverse complement predictions [Default: %default]')
@@ -75,15 +69,6 @@ def main():
   parser.add_option('-t', dest='targets_file',
       default=None, type='str',
       help='File specifying target indexes and labels in table format')
-  parser.add_option('--ti', dest='track_indexes',
-      default=None, type='str',
-      help='Comma-separated list of target indexes to output BigWig tracks')
-  parser.add_option('--threads', dest='threads',
-      default=False, action='store_true',
-      help='Run CPU math and output in a separate thread [Default: %default]')
-  # parser.add_option('-u', dest='penultimate',
-  #     default=False, action='store_true',
-  #     help='Compute SED in the penultimate layer [Default: %default]')
   (options, args) = parser.parse_args()
 
   if len(args) == 3:
@@ -132,16 +117,8 @@ def main():
   if not os.path.isdir(options.out_dir):
     os.mkdir(options.out_dir)
 
-  if options.track_indexes is None:
-    options.track_indexes = []
-  else:
-    options.track_indexes = [int(ti) for ti in options.track_indexes.split(',')]
-    if not os.path.isdir('%s/tracks' % options.out_dir):
-      os.mkdir('%s/tracks' % options.out_dir)
-
   options.shifts = [int(shift) for shift in options.shifts.split(',')]
   options.sad_stats = options.sad_stats.split(',')
-
 
   #################################################################
   # read parameters and targets
@@ -154,19 +131,41 @@ def main():
 
   if options.targets_file is None:
     target_slice = None
+    sum_strand = False
   else:
     targets_df = pd.read_csv(options.targets_file, sep='\t', index_col=0)
-    target_ids = targets_df.identifier
-    target_labels = targets_df.description
     target_slice = targets_df.index
+
+    if 'strand_pair' in targets_df.columns:
+      sum_strand = True
+
+      # prep strand
+      targets_strand_df = targets_prep_strand(targets_df)
+
+      # set strand pairs
+      params_model['strand_pair'] = [np.array(targets_df.strand_pair)]
+
+      # construct strand sum transform
+      strand_transform = dok_matrix((targets_df.shape[0], targets_strand_df.shape[0]))
+      sti = 0
+      for ti, target in targets_df.iterrows():
+          strand_transform[ti,sti] = True
+          if target.strand_pair == target.name:
+              sti += 1
+          else:
+              if target.identifier[-1] == '-':
+                  sti += 1
+      strand_transform = strand_transform.tocsr()
+
+    else:
+      targets_strand_df = targets_df
+      sum_strand = False
 
   #################################################################
   # setup model
 
   # can we sum on GPU?
-  length_stats = set(['SAX','SAXR','SAR','ALT','REF'])
-  sum_length = length_stats.isdisjoint(set(options.sad_stats))
-  # sum_length = False # minimal influence
+  sum_length = (options.sad_stats == 'SAD')
 
   seqnn_model = seqnn.SeqNN(params_model)
   seqnn_model.restore(model_file)
@@ -180,6 +179,9 @@ def main():
   if options.targets_file is None:
     target_ids = ['t%d' % ti for ti in range(num_targets)]
     target_labels = ['']*len(target_ids)
+    targets_strand_df = pd.DataFrame({
+      'identifier':target_ids,
+      'description':target_labels})
 
   #################################################################
   # load SNPs
@@ -198,66 +200,41 @@ def main():
     # read SNPs form VCF
     snps = bvcf.vcf_snps(vcf_file)
 
-  num_snps = len(snps)
-
   # open genome FASTA
   genome_open = pysam.Fastafile(options.genome_fasta)
-
-  def snp_gen():
-    for snp in snps:
-      # get SNP sequences
-      snp_1hot_list = bvcf.snp_seq1(snp, params_model['seq_length'], genome_open)
-      for snp_1hot in snp_1hot_list:
-        yield snp_1hot
-
-
-  #################################################################
-  # setup output
-
-  sad_out = initialize_output_h5(options.out_dir, options.sad_stats,
-                                 snps, target_ids, target_labels, targets_length)
-
-  if options.threads:
-    snp_threads = []
-    snp_queue = Queue()
-    for i in range(1):
-      sw = SNPWorker(snp_queue, sad_out, options.sad_stats, options.log_pseudo)
-      sw.start()
-      snp_threads.append(sw)
-
 
   #################################################################
   # predict SNP scores, write output
 
-  # initialize predictions stream
-  preds_stream = stream.PredStreamGen(seqnn_model, snp_gen(), params_train['batch_size'])
+  # setup output
+  sad_out = initialize_output_h5(options.out_dir, options.sad_stats,
+                                 snps, targets_length, targets_strand_df)
 
-  # predictions index
-  pi = 0
+  for si, snp in tqdm(enumerate(snps), total=len(snps)):
+    # get SNP sequences
+    snp_1hot_list = bvcf.snp_seq1(snp, params_model['seq_length'], genome_open)
+    snps_1hot = np.array(snp_1hot_list)
 
-  for si in range(num_snps):
     # get predictions
-    ref_preds = preds_stream[pi]
-    pi += 1
-    alt_preds = preds_stream[pi]
-    pi += 1
-
-    if options.threads:
-      # queue SNP
-      snp_queue.put((ref_preds, alt_preds, si))
+    if params_train['batch_size'] == 1:
+      ref_preds = seqnn_model(snps_1hot[:1])[0]
+      alt_preds = seqnn_model(snps_1hot[1:])[0]
     else:
-      # process SNP
-      if sum_length:
-        write_snp(ref_preds, alt_preds, sad_out, si,
-                  options.sad_stats, options.log_pseudo)
-      else:
-        write_snp_len(ref_preds, alt_preds, sad_out, si,
-                      options.sad_stats, options.log_pseudo)
+      snp_preds = seqnn_model(snps_1hot)
+      ref_preds, alt_preds = snp_preds[0], snp_preds[1]
+    
+    # sum strand pairs
+    if sum_strand:
+      ref_preds = ref_preds * strand_transform
+      alt_preds = alt_preds * strand_transform
 
-  if options.threads:
-    # finish queue
-    print('Waiting for threads to finish.', flush=True)
-    snp_queue.join()
+    # process SNP
+    if sum_length:
+      write_snp(ref_preds, alt_preds, sad_out, si,
+                options.sad_stats)
+    else:
+      write_snp_len(ref_preds, alt_preds, sad_out, si,
+                    options.sad_stats)
 
   # close genome
   genome_open.close()
@@ -269,10 +246,10 @@ def main():
   sad_out.close()
 
 
-def initialize_output_h5(out_dir, sad_stats, snps, target_ids, target_labels, targets_length):
+def initialize_output_h5(out_dir, sad_stats, snps, targets_length, targets_df):
   """Initialize an output HDF5 file for SAD stats."""
 
-  num_targets = len(target_ids)
+  num_targets = targets_df.shape[0]
   num_snps = len(snps)
 
   sad_out = h5py.File('%s/sad.h5' % out_dir, 'w')
@@ -308,8 +285,8 @@ def initialize_output_h5(out_dir, sad_stats, snps, target_ids, target_labels, ta
   sad_out.create_dataset('alt_allele', data=snp_alts)
 
   # write targets
-  sad_out.create_dataset('target_ids', data=np.array(target_ids, 'S'))
-  sad_out.create_dataset('target_labels', data=np.array(target_labels, 'S'))
+  sad_out.create_dataset('target_ids', data=np.array(targets_df.identifier, 'S'))
+  sad_out.create_dataset('target_labels', data=np.array(targets_df.description, 'S'))
 
   # initialize SAD stats
   for sad_stat in sad_stats:
@@ -323,7 +300,6 @@ def initialize_output_h5(out_dir, sad_stats, snps, target_ids, target_labels, ta
         dtype='float16')
 
   return sad_out
-
 
 def write_pct(sad_out, sad_stats):
   """Compute percentile values for each target and write to HDF5."""
@@ -351,7 +327,7 @@ def write_pct(sad_out, sad_stats):
       sad_out.create_dataset(sad_stat_pct, data=sad_pct, dtype='float16')
 
     
-def write_snp(ref_preds_sum, alt_preds_sum, sad_out, si, sad_stats, log_pseudo):
+def write_snp(ref_preds_sum, alt_preds_sum, sad_out, si, sad_stats):
   """Write SNP predictions to HDF, assuming the length dimension has
       been collapsed."""
 
@@ -361,23 +337,27 @@ def write_snp(ref_preds_sum, alt_preds_sum, sad_out, si, sad_stats, log_pseudo):
     sad_out['SAD'][si,:] = sad.astype('float16')
 
   # compare reference to alternative via mean log division
-  if 'SADR' in sad_stats:
-    sar = np.log2(alt_preds_sum + log_pseudo) \
-                   - np.log2(ref_preds_sum + log_pseudo)
-    sad_out['SADR'][si,:] = sar.astype('float16')
+  # if 'SADR' in sad_stats:
+  #   sar = np.log2(alt_preds_sum + log_pseudo) \
+  #                  - np.log2(ref_preds_sum + log_pseudo)
+  #   sad_out['SADR'][si,:] = sar.astype('float16')
 
 
-def write_snp_len(ref_preds, alt_preds, sad_out, si, sad_stats, log_pseudo):
+def write_snp_len(ref_preds, alt_preds, sad_out, si, sad_stats):
   """Write SNP predictions to HDF, assuming the length dimension has
       been maintained."""
+  seq_length, num_targets = ref_preds.shape
 
-  ref_preds = ref_preds.astype('float64')
-  alt_preds = alt_preds.astype('float64')
-  num_targets = ref_preds.shape[-1]
+  # compute pseudocounts
+  pseudocounts = np.percentile(ref_preds, 25, axis=0)
 
   # sum across length
   ref_preds_sum = ref_preds.sum(axis=0)
   alt_preds_sum = alt_preds.sum(axis=0)
+
+  # difference
+  altref_diff = alt_preds - ref_preds
+  altref_adiff = np.abs(altref_diff)
 
   # compare reference to alternative via mean subtraction
   if 'SAD' in sad_stats:
@@ -386,69 +366,70 @@ def write_snp_len(ref_preds, alt_preds, sad_out, si, sad_stats, log_pseudo):
 
   # compare reference to alternative via max subtraction
   if 'SAX' in sad_stats:
-    sad_vec = (alt_preds - ref_preds)
-    max_i = np.argmax(np.abs(sad_vec), axis=0)
-    sax = sad_vec[max_i, np.arange(num_targets)]
+    max_i = np.argmax(altref_adiff, axis=0)
+    sax = altref_diff[max_i, np.arange(num_targets)]
     sad_out['SAX'][si] = sax.astype('float16')
-
-  # compare reference to alternative via mean subtraction
-  if 'ASAD' in sad_stats:
-    sad_vec = np.abs(alt_preds - ref_preds)
-    asad = sad_vec.sum(axis=0)
-    sad_out['SAD'][si] = asad.astype('float16')
 
   # compare reference to alternative via mean log division
   if 'SADR' in sad_stats:
-    sar = np.log2(alt_preds_sum + log_pseudo) \
-                   - np.log2(ref_preds_sum + log_pseudo)
+    sar = np.log2(alt_preds_sum + pseudocounts) \
+                   - np.log2(ref_preds_sum + pseudocounts)
     sad_out['SADR'][si] = sar.astype('float16')
 
   # compare reference to alternative via max subtraction
   if 'SAXR' in sad_stats:
-    sar_vec = np.log2(alt_preds + log_pseudo) \
-                - np.log2(ref_preds + log_pseudo)
+    sar_vec = np.log2(alt_preds + pseudocounts) \
+                - np.log2(ref_preds + pseudocounts)
     max_i = np.argmax(np.abs(sar_vec), axis=0)
     saxr = sar_vec[max_i, np.arange(num_targets)]
     sad_out['SAXR'][si] = saxr.astype('float16')
 
   # compare geometric means
   if 'SAR' in sad_stats:
-    sar_vec = np.log2(alt_preds + log_pseudo) \
-                - np.log2(ref_preds + log_pseudo)
+    sar_vec = np.log2(alt_preds + pseudocounts) \
+                - np.log2(ref_preds + pseudocounts)
     geo_sad = sar_vec.sum(axis=0)
     sad_out['SAR'][si] = geo_sad.astype('float16')
+
+  # L1 norm of difference vector
+  if 'D1' in sad_stats:
+    sad_d1 = altref_adiff.sum(axis=0)
+    sad_out['D1'][si] = sad_d1.astype('float16')
+
+  # L2 norm of difference vector
+  if 'D2' in sad_stats or 'SD2' in sad_stats:
+    altref_diff2 = np.power(altref_diff, 2)
+    sad_d2 = altref_diff2.sum(axis=0)
+    sad_d2 = np.sqrt(sad_d2)
+
+    if 'D2' in sad_stats:
+      sad_out['D2'][si] = sad_d2.astype('float16')
+
+    if 'SD2' in sad_stats:
+      altref_sign = np.sign(altref_diff)
+      sad_sd2_sign = altref_sign*altref_diff2
+      sad_sd2_sign = np.sign(sad_sd2_sign.sum(axis=0))
+      sad_sd2 = sad_sd2_sign * sad_d2
+      sad_out['SD2'][si] = sad_sd2.astype('float16')
+
+  if 'JS' in sad_stats:
+    # normalized scores
+    ref_preds_norm = ref_preds + pseudocounts
+    ref_preds_norm /= ref_preds_norm.sum(axis=0)
+    alt_preds_norm = alt_preds + pseudocounts
+    alt_preds_norm /= alt_preds_norm.sum(axis=0)
+
+    # compare normalized JS
+    ref_alt_entr = rel_entr(ref_preds_norm, alt_preds_norm).sum(axis=0)
+    alt_ref_entr = rel_entr(alt_preds_norm, ref_preds_norm).sum(axis=0)
+    js_dist = (ref_alt_entr + alt_ref_entr) / 2
+    sad_out['JS'][si] = js_dist.astype('float16')
 
   # predictions
   if 'REF' in sad_stats:
     sad_out['REF'][si] = ref_preds.astype('float16')
   if 'ALT' in sad_stats:
     sad_out['ALT'][si] = alt_preds.astype('float16')
-
-
-class SNPWorker(Thread):
-  """Compute summary statistics and write to HDF."""
-  def __init__(self, snp_queue, sad_out, stats, log_pseudo=1):
-    Thread.__init__(self)
-    self.queue = snp_queue
-    self.daemon = True
-    self.sad_out = sad_out
-    self.stats = stats
-    self.log_pseudo = log_pseudo
-
-  def run(self):
-    while True:
-      # unload predictions
-      ref_preds, alt_preds, szi = self.queue.get()
-
-      # write SNP
-      write_snp(ref_preds, alt_preds, self.sad_out, szi, self.stats, self.log_pseudo)
-
-      if szi % 32 == 0:
-        gc.collect()
-
-      # communicate finished task
-      self.queue.task_done()
-
 
 ################################################################################
 # __main__

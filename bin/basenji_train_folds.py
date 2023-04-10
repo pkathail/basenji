@@ -74,9 +74,9 @@ def main():
   test_options.add_option('--shifts', dest='shifts',
       default='0', type='str',
       help='Ensemble prediction shifts [Default: %default]')
-  parser.add_option('--spec_step', dest='spec_step',
+  parser.add_option('--step', dest='step',
       default=1, type='int',
-      help='Positional step for specificity predict [Default: %default]')
+      help='Spatial step for specificity/spearmanr [Default: %default]')
   parser.add_option_group(test_options)
 
   # multi
@@ -151,7 +151,7 @@ def main():
   if options.queue == 'standard':
     num_cpu = 8
     num_gpu = 0
-    time_base = 36
+    time_base = 64
   else:
     num_cpu = 2
     num_gpu = 1
@@ -211,7 +211,7 @@ def main():
                       queue=options.queue,
                       cpu=4,
                       gpu=params_train.get('num_gpu',1),
-                      mem=60000, time='60-0:0:0')
+                      mem=75000, time='60-0:0:0')
         jobs.append(j)
 
   slurm.multi_run(jobs, max_proc=options.processes, verbose=True,
@@ -299,6 +299,8 @@ def main():
               basenji_cmd += ' --rc'
             if options.shifts:
               basenji_cmd += ' --shifts %s' % options.shifts
+            basenji_cmd += ' --rank'
+            basenji_cmd += ' --step %d' % options.step
             basenji_cmd += ' %s' % params_file
             basenji_cmd += ' %s' % model_file
             basenji_cmd += ' %s/data%d' % (it_dir, di)
@@ -341,7 +343,7 @@ def main():
             basenji_cmd += ' basenji_test_specificity.py'
             basenji_cmd += ' --head %d' % di
             basenji_cmd += ' -o %s' % out_dir
-            basenji_cmd += ' -s %d' % options.spec_step
+            basenji_cmd += ' --step %d' % options.step
             if options.rc:
               basenji_cmd += ' --rc'
             if options.shifts:
@@ -357,7 +359,7 @@ def main():
                             err_file='%s.err'%out_dir,
                             queue=options.queue,
                             cpu=num_cpu, gpu=num_gpu,
-                            mem=120000,
+                            mem=150000,
                             time='%d:00:00' % (5*time_base))
             jobs.append(basenji_job)
         

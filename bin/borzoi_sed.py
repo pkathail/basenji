@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2017 Calico LLC
+# Copyright 2022 Calico LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 import pybedtools
 import pysam
+from scipy.special import rel_entr
 import tensorflow as tf
 
 from basenji import dna_io
@@ -48,23 +49,23 @@ relative to gene exons in a GTF file.
 # main
 ################################################################################
 def main():
-  usage = 'usage: %prog [options] <params_file> <model_file> <vcf_file> <genes_gtf>'
+  usage = 'usage: %prog [options] <params_file> <model_file> <vcf_file>'
   parser = OptionParser(usage)
+  parser.add_option('-b', dest='bedgraph',
+      default=False, action='store_true',
+      help='Write ref/alt predictions as bedgraph [Default: %default]')
   parser.add_option('-f', dest='genome_fasta',
       default='%s/data/hg38.fa' % os.environ['BASENJIDIR'],
       help='Genome FASTA for sequences [Default: %default]')
-  parser.add_option('-n', dest='norm_file',
-      default=None,
-      help='Normalize SED scores')
+  parser.add_option('-g', dest='genes_gtf',
+      default='%s/genes/gencode41/gencode41_basic_nort.gtf' % os.environ['HG38'],
+      help='GTF for gene definition [Default %default]')
   parser.add_option('-o',dest='out_dir',
       default='sed',
       help='Output directory for tables and plots [Default: %default]')
   parser.add_option('-p', dest='processes',
       default=None, type='int',
       help='Number of processes, passed by multi script')
-  parser.add_option('--pseudo', dest='log_pseudo',
-      default=1, type='float',
-      help='Log2 pseudocount [Default: %default]')
   parser.add_option('--rc', dest='rc',
       default=False, action='store_true',
       help='Average forward and reverse complement predictions [Default: %default]')
@@ -82,20 +83,18 @@ def main():
       help='File specifying target indexes and labels in table format')
   (options, args) = parser.parse_args()
 
-  if len(args) == 4:
+  if len(args) == 3:
     # single worker
     params_file = args[0]
     model_file = args[1]
     vcf_file = args[2]
-    genes_gtf_file = args[3]
 
-  elif len(args) == 5:
+  elif len(args) == 4:
     # multi separate
     options_pkl_file = args[0]
     params_file = args[1]
     model_file = args[2]
     vcf_file = args[3]
-    genes_gtf_file = args[4]
 
     # save out dir
     out_dir = options.out_dir
@@ -108,14 +107,13 @@ def main():
     # update output directory
     options.out_dir = out_dir
 
-  elif len(args) == 6:
+  elif len(args) == 5:
     # multi worker
     options_pkl_file = args[0]
     params_file = args[1]
     model_file = args[2]
     vcf_file = args[3]
-    genes_gtf_file = args[4]
-    worker_index = int(args[5])
+    worker_index = int(args[4])
 
     # load options
     options_pkl = open(options_pkl_file, 'rb')
@@ -181,7 +179,7 @@ def main():
     snps = bvcf.vcf_snps(vcf_file)
 
   # read genes
-  transcriptome = bgene.Transcriptome(genes_gtf_file)
+  transcriptome = bgene.Transcriptome(options.genes_gtf)
   gene_strand = {}
   for gene_id, gene in transcriptome.genes.items():
     gene_strand[gene_id] = gene.strand
@@ -233,6 +231,9 @@ def main():
     alt_preds = preds_stream[pi]
     pi += 1
 
+    if options.bedgraph:
+      write_bedgraph_snp(snps[si], ref_preds, alt_preds, options.out_dir, model_stride)
+
     # for each overlapping gene
     for gene_id, gene_slice in snpseq_gene_slice[si].items():
       if len(gene_slice) > len(set(gene_slice)):
@@ -250,9 +251,13 @@ def main():
       ref_preds_gene = ref_preds_gene[...,gene_strand_mask]
       alt_preds_gene = alt_preds_gene[...,gene_strand_mask]
 
+      # compute pseudocounts
+      ref_preds_strand = ref_preds[...,gene_strand_mask]
+      pseudocounts = np.percentile(ref_preds_strand, 25, axis=0)
+
       # write scores to HDF
       write_snp(ref_preds_gene, alt_preds_gene, sed_out, xi,
-        options.sed_stats, options.log_pseudo)
+        options.sed_stats, pseudocounts)
 
       xi += 1
 
@@ -266,7 +271,7 @@ def main():
   sed_out.close()
 
 
-def map_snpseq_genes(snps, seq_len, transcriptome, model_stride, span):
+def map_snpseq_genes(snps, seq_len, transcriptome, model_stride, span, majority_overlap=True, intron1=False):
   """Intersect SNP sequences with gene exons, constructing a list
      mapping sequence indexes to dictionaries of gene_ids to their
      exon-overlapping positions in the sequence."""
@@ -301,17 +306,34 @@ def map_snpseq_genes(snps, seq_len, transcriptome, model_stride, span):
     gene_seq_start = max(0, gene_start - seq_start)
     gene_seq_end = max(0, gene_end - seq_start)
 
-    # requires >50% overlap
-    bin_start = int(np.round(gene_seq_start / model_stride))
-    bin_end = int(np.round(gene_seq_end / model_stride))
+    if majority_overlap:
+      # requires >50% overlap
+      bin_start = int(np.round(gene_seq_start / model_stride))
+      bin_end = int(np.round(gene_seq_end / model_stride))
+    else:
+      # any overlap
+      bin_start = int(np.floor(gene_seq_start / model_stride))
+      bin_end = int(np.ceil(gene_seq_end / model_stride))
 
-    # clip right boundaries
+    if intron1:
+      bin_start -= 1
+      bin_end += 1
+
+    # clip boundaries
     bin_max = int(seq_len/model_stride)
     bin_start = min(bin_start, bin_max)
     bin_end = min(bin_end, bin_max)
+    bin_start = max(0, bin_start)
+    bin_end = max(0, bin_end)
 
-    # save gene bin positions
-    snpseq_gene_slice[si].setdefault(gene_id,[]).extend(range(bin_start, bin_end))
+    if bin_end - bin_start > 0:
+      # save gene bin positions
+      snpseq_gene_slice[si].setdefault(gene_id,[]).extend(range(bin_start, bin_end))
+
+  # handle possible overlaps
+  for si in range(len(snps)):
+    for gene_id, gene_slice in snpseq_gene_slice[si].items():
+      snpseq_gene_slice[si][gene_id] = np.unique(gene_slice)
 
   return snpseq_gene_slice
 
@@ -406,11 +428,11 @@ def make_snpseq_bedt(snps, seq_len):
 def targets_prep_strand(targets_df):
   # attach strand
   targets_strand = []
-  for ti, identifier in enumerate(targets_df.identifier):
-    if targets_df.strand_pair.iloc[ti] == ti:
+  for _, target in targets_df.iterrows():
+    if target.strand_pair == target.name:
       targets_strand.append('.')
     else:
-      targets_strand.append(identifier[-1])
+      targets_strand.append(target.identifier[-1])
   targets_df['strand'] = targets_strand
 
   # collapse stranded
@@ -446,13 +468,53 @@ def write_pct(sed_out, sed_stats):
       sed_out.create_dataset(sad_stat_pct, data=sad_pct, dtype='float16')
 
 
-def write_snp(ref_preds, alt_preds, sed_out, xi, sed_stats, log_pseudo):
+def write_bedgraph_snp(snp, ref_preds, alt_preds, out_dir, model_stride):
+  """Write full predictions around SNP as BedGraph."""
+  target_length, num_targets = ref_preds.shape
+
+  # mean across targets
+  ref_preds = ref_preds.mean(axis=-1, dtype='float32')
+  alt_preds = alt_preds.mean(axis=-1, dtype='float32')
+  diff_preds = alt_preds - ref_preds
+
+  # initialize raw predictions/targets
+  ref_out = open('%s/%s_ref.bedgraph' % (out_dir, snp.rsid), 'w')
+  alt_out = open('%s/%s_alt.bedgraph' % (out_dir, snp.rsid), 'w')
+  diff_out = open('%s/%s_diff.bedgraph' % (out_dir, snp.rsid), 'w')
+
+  # specify positions
+  seq_len = target_length * model_stride
+  left_len = seq_len // 2 - 1
+  right_len = seq_len // 2
+  seq_start = snp.pos - left_len - 1
+  seq_end = snp.pos + right_len + max(0,
+                                      len(snp.ref_allele) - snp.longest_alt())
+
+  # write values
+  bin_start = seq_start
+  for bi in range(target_length):
+    bin_end = bin_start + model_stride
+    cols = [snp.chr, str(bin_start), str(bin_end), str(ref_preds[bi])]
+    print('\t'.join(cols), file=ref_out)
+    cols = [snp.chr, str(bin_start), str(bin_end), str(alt_preds[bi])]
+    print('\t'.join(cols), file=alt_out)
+    cols = [snp.chr, str(bin_start), str(bin_end), str(diff_preds[bi])]
+    print('\t'.join(cols), file=diff_out)
+    bin_start = bin_end
+
+  ref_out.close()
+  alt_out.close()
+  diff_out.close()
+
+
+def write_snp(ref_preds, alt_preds, sed_out, xi, sed_stats, pseudocounts):
   """Write SNP predictions to HDF, assuming the length dimension has
       been maintained."""
 
+  # ref/alt_preds is L x T
   ref_preds = ref_preds.astype('float64')
   alt_preds = alt_preds.astype('float64')
-  num_targets = ref_preds.shape[-1]
+  seq_len, num_targets = ref_preds.shape
 
   # sum across bins
   ref_preds_sum = ref_preds.sum(axis=0)
@@ -465,24 +527,41 @@ def write_snp(ref_preds, alt_preds, sed_out, xi, sed_stats, log_pseudo):
 
   # compare reference to alternative via mean log division
   if 'SEDR' in sed_stats:
-    sar = np.log2(alt_preds_sum + log_pseudo) \
-                   - np.log2(ref_preds_sum + log_pseudo)
+    sar = np.log2(alt_preds_sum + pseudocounts) \
+                   - np.log2(ref_preds_sum + pseudocounts)
     sed_out['SEDR'][xi] = sar.astype('float16')
 
   # compare geometric means
   if 'SER' in sed_stats:
-    sar_vec = np.log2(alt_preds + log_pseudo) \
-                - np.log2(ref_preds + log_pseudo)
+    sar_vec = np.log2(alt_preds + pseudocounts) \
+                - np.log2(ref_preds + pseudocounts)
     geo_sad = sar_vec.sum(axis=0)
     sed_out['SER'][xi] = geo_sad.astype('float16')
 
-  # compare normalized difference
+  # normalized scores
+  ref_preds_norm = ref_preds + pseudocounts
+  ref_preds_norm /= ref_preds_norm.sum(axis=0)
+  alt_preds_norm = alt_preds + pseudocounts
+  alt_preds_norm /= alt_preds_norm.sum(axis=0)
+
+  # compare normalized squared difference
   if 'D2' in sed_stats:
-    ref_preds_norm = ref_preds / ref_preds_sum
-    alt_preds_norm = alt_preds / alt_preds_sum
     diff_norm2 = np.power(ref_preds_norm - alt_preds_norm, 2)
     diff_norm2 = diff_norm2.sum(axis=0)
     sed_out['D2'][xi] = diff_norm2.astype('float16')
+
+  # compare normalized abs max
+  if 'D0' in sed_stats:
+    diff_norm0 = np.abs(ref_preds_norm - alt_preds_norm)
+    diff_norm0 = diff_norm0.max(axis=0)
+    sed_out['D0'][xi] = diff_norm0.astype('float16')
+
+  # compare normalized JS
+  if 'JS' in sed_stats:
+    ref_alt_entr = rel_entr(ref_preds_norm, alt_preds_norm).sum(axis=0)
+    alt_ref_entr = rel_entr(alt_preds_norm, ref_preds_norm).sum(axis=0)
+    js_dist = (ref_alt_entr + alt_ref_entr) / 2
+    sed_out['JS'][xi] = js_dist.astype('float16')
 
   # predictions
   if 'REF' in sed_stats:

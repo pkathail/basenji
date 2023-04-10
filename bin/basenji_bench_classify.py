@@ -6,6 +6,7 @@ import pdb
 
 import h5py
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import RidgeClassifier
 from sklearn.metrics import roc_auc_score, roc_curve
@@ -58,6 +59,8 @@ def main():
     parser.add_option('--stat', dest='sad_stat',
             default='SAD',
             help='HDF5 key stat to consider. [Default: %default]')
+    parser.add_option('-t', dest='targets_file',
+            default=None)
     (options,args) = parser.parse_args()
 
     if len(args) != 2:
@@ -75,9 +78,16 @@ def main():
     if options.model_pkl:
         model = joblib.load(options.model_pkl)
 
+
+    if options.targets_file is None:
+        target_slice = None
+    else:
+        targets_df = pd.read_csv(options.targets_file, sep='\t', index_col=0)
+        target_slice = targets_df.index
+
     # read positive/negative variants
-    Xp = read_sad(sadp_file, options.sad_stat)
-    Xn = read_sad(sadn_file, options.sad_stat)
+    Xp = read_sad(sadp_file, options.sad_stat, target_slice)
+    Xn = read_sad(sadn_file, options.sad_stat, target_slice)
     if options.log:
         Xp = np.arcsinh(Xp)
         Xn = np.arcsinh(Xn)
@@ -108,6 +118,10 @@ def main():
     # train classifier
     if X.shape[1] == 1:
         aurocs, fpr_folds, tpr_folds, fpr_mean, tpr_mean = fold_roc(X, y, folds=8)
+
+        # save preds
+        if options.save_preds:
+            np.save('%s/preds.npy' % options.out_dir, X)
     else:
         # aurocs, fpr_folds, tpr_folds, fpr_full, tpr_full = ridge_roc(X, y, folds=8, alpha=10000)
         aurocs, fpr_folds, tpr_folds, fpr_mean, tpr_mean, preds = randfor_roc(X, y, folds=8,
@@ -332,9 +346,12 @@ def read_indel(sad_file, indel_abs=True, indel_bool=False):
         indels = (indels != 0)
     return indels
 
-def read_sad(sad_file, sad_stat):
+def read_sad(sad_file, sad_stat, target_slice):
     with h5py.File(sad_file, 'r') as sad_open:
-        sad = np.array(sad_open[sad_stat], dtype='float64')
+        sad = sad_open[sad_stat][:]
+    if target_slice is not None:
+        sad = sad[...,target_slice]
+    sad = np.nan_to_num(sad).astype('float32')
     return sad
 
 

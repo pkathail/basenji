@@ -268,7 +268,9 @@ def main():
     seq_preds_sum = []
     seq_preds_center = []
     seq_preds_scd = []
+    seq_preds_js = []
     preds_mut0 = preds_stream[pi]
+    preds_mut0_norm = preds_mut0 / preds_mut0.sum(axis=0)
     for spi in range(preds_per_seq):
       preds_mut = preds_stream[pi]
       preds_sum = preds_mut.sum(axis=0)
@@ -279,6 +281,12 @@ def main():
       if 'scd' in options.sad_stats:
         preds_scd = np.sqrt(((preds_mut-preds_mut0)**2).sum(axis=0))
         seq_preds_scd.append(preds_scd)
+      if 'js' in options.sad_stats:
+        preds_mut_norm = preds_mut / preds_mut.sum(axis=0)
+        ref_alt_entr = rel_entr(preds_mut0_norm, preds_mut_norm).sum(axis=0)
+        alt_ref_entr = rel_entr(preds_mut_norm, preds_mut0_norm).sum(axis=0)
+        js_dist = (ref_alt_entr + alt_ref_entr) / 2
+        seq_preds_js.append(js_dist)
       pi += 1
     seq_preds_sum = np.array(seq_preds_sum)
     seq_preds_center = np.array(seq_preds_center)
@@ -288,7 +296,7 @@ def main():
     score_queue.join()
 
     # queue sequence for scoring
-    seq_pred_stats = (seq_preds_sum, seq_preds_center, seq_preds_scd)
+    seq_pred_stats = (seq_preds_sum, seq_preds_center, seq_preds_scd, seq_preds_js)
     score_queue.put((seqs_dna[si], seq_pred_stats, si))
     
     # queue sequence for plotting
@@ -362,7 +370,7 @@ class ScoreWorker(Thread):
       try:
         # unload predictions
         seq_dna, seq_pred_stats, si = self.queue.get()
-        seq_preds_sum, seq_preds_center, seq_preds_scd = seq_pred_stats
+        seq_preds_sum, seq_preds_center, seq_preds_scd, seq_preds_js = seq_pred_stats
         print('Writing %d' % si, flush=True)
 
         # seq_preds_sum is (1 + 3*mut_len) x (num_targets)
@@ -393,6 +401,8 @@ class ScoreWorker(Thread):
             seq_preds_stat = seq_preds_center
           elif sad_stat == 'scd':
             seq_preds_stat = seq_preds_scd
+          elif sad_stat == 'js':
+            seq_preds_stat = seq_preds_js
           else:
             print('Unrecognized summary statistic "%s"' % options.sad_stat)
             exit(1)
@@ -413,7 +423,7 @@ class ScoreWorker(Thread):
                 pi += 1
 
           # normalize positions
-          if sad_stat != 'sqdiff':
+          if sad_stat in ['sum','center']:
             seq_scores -= seq_scores.mean(axis=1, keepdims=True)
 
           # write to HDF5
