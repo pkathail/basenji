@@ -69,6 +69,9 @@ def main():
   parser.add_option('-t', dest='targets_file',
       default=None, type='str',
       help='File specifying target indexes and labels in table format')
+  parser.add_option('--training_mode', dest='training_mode',
+      default=False, action='store_true',
+      help='Make predictions in training mode.  [Default: %default]')
   (options, args) = parser.parse_args()
 
   if len(args) == 3:
@@ -217,10 +220,10 @@ def main():
 
     # get predictions
     if params_train['batch_size'] == 1:
-      ref_preds = seqnn_model(snps_1hot[:1])[0]
-      alt_preds = seqnn_model(snps_1hot[1:])[0]
+      ref_preds = seqnn_model(snps_1hot[:1], training=options.training_mode)[0]
+      alt_preds = seqnn_model(snps_1hot[1:], training=options.training_mode)[0]
     else:
-      snp_preds = seqnn_model(snps_1hot)
+      snp_preds = seqnn_model(snps_1hot, training=options.training_mode)
       ref_preds, alt_preds = snp_preds[0], snp_preds[1]
     
     # sum strand pairs

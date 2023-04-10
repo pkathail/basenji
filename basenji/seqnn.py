@@ -491,7 +491,7 @@ class SeqNN():
       return self.models[head_i].output_shape[-1]
 
 
-  def __call__(self, x, head_i=None, dtype='float32'):
+  def __call__(self, x, head_i=None, dtype='float32', training=False):
     """ Predict targets for SeqDataset. """
     # choose model
     if self.ensemble is not None:
@@ -501,7 +501,7 @@ class SeqNN():
     else:
       model = self.model
 
-    return model(x).numpy().astype(dtype)
+    return model(x, training=training).numpy().astype(dtype)
       
 
   def predict(self, seq_data, head_i=None, generator=False, stream=False, dtype='float32', **kwargs):
