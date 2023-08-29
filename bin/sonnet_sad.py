@@ -151,9 +151,11 @@ def main():
   # query num model targets 
   seq_length = seqnn_model.predict_on_batch.input_signature[0].shape[1]
   null_1hot = np.zeros((1,seq_length,4))
-  null_preds = seqnn_model.predict_on_batch(null_1hot)
-  null_preds = null_preds[options.species].numpy()
-  _, targets_length, num_targets = null_preds.shape
+  #null_preds = seqnn_model.predict_on_batch(null_1hot)
+  #null_preds = null_preds[options.species].numpy()
+  #_, targets_length, num_targets = null_preds.shape
+  targets_length = 896
+  num_targets = 5313
 
   if options.targets_file is None:
     target_ids = ['t%d' % ti for ti in range(num_targets)]
@@ -193,7 +195,7 @@ def main():
   # setup output
 
   sad_out = initialize_output_h5(options.out_dir, options.sad_stats,
-                                 snps, target_ids, target_labels, targets_length)
+                                 snps, targets_length, targets_df)
 
   #################################################################
   # predict SNP scores, write output
@@ -215,7 +217,7 @@ def main():
 
     # process SNP
     write_snp_len(ref_preds, alt_preds, sad_out, si,
-                  options.sad_stats, options.log_pseudo)
+                  options.sad_stats)
 
   # close genome
   genome_open.close()

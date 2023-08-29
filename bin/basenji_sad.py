@@ -138,7 +138,7 @@ def main():
   else:
     targets_df = pd.read_csv(options.targets_file, sep='\t', index_col=0)
     target_slice = targets_df.index
-
+    
     if 'strand_pair' in targets_df.columns:
       sum_strand = True
 
@@ -433,7 +433,11 @@ def write_snp_len(ref_preds, alt_preds, sad_out, si, sad_stats):
     sad_out['REF'][si] = ref_preds.astype('float16')
   if 'ALT' in sad_stats:
     sad_out['ALT'][si] = alt_preds.astype('float16')
-
+  if 'REF_sum' in sad_stats:
+    sad_out['REF_sum'][si] = ref_preds[447:450, :].sum(axis=0).astype('float16')
+  if 'ALT_sum' in sad_stats:
+    sad_out['ALT_sum'][si] = alt_preds[447:450, :].sum(axis=0).astype('float16')
+ 
 ################################################################################
 # __main__
 ################################################################################
