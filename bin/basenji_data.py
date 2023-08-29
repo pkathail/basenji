@@ -372,7 +372,7 @@ def main():
       print('Skipping existing %s' % seqs_cov_file, file=sys.stderr)
     else:
       cmd = 'basenji_data_read.py'
-      # cmd += ' --crop %d' % options.crop_bp
+      cmd += ' --crop %d' % options.crop_bp
       cmd += ' -w %d' % options.pool_width
       cmd += ' -u %s' % targets_df['sum_stat'].iloc[ti]
       if clip_ti is not None:
