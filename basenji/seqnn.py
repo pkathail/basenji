@@ -525,7 +525,7 @@ class SeqNN():
       for x, y in seq_data.dataset:
         yh = model.predict(x, **kwargs)
         preds.append(yh.astype(dtype))
-      return np.concatenate(preds, axis=0, dtype=dtype)
+      return np.concatenate(preds, axis=0)
     else:
       return model.predict(dataset, **kwargs).astype(dtype)
 

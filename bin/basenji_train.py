@@ -66,8 +66,11 @@ def main():
   parser.add_option('--tfr_eval', dest='tfr_eval_pattern',
       default=None,
       help='Evaluation TFR pattern string appended to data_dir/tfrecords for subsetting [Default: %default]')
+  parser.add_option('--stats_dir', dest='stats_dir',
+      default=None,
+      help='Path to statistics.json file [Default: %default]')
   (options, args) = parser.parse_args()
-
+  
   if len(args) < 2:
     parser.error('Must provide parameters and data directory.')
   else:
