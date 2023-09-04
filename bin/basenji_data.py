@@ -392,24 +392,6 @@ def main():
 
 
   ################################################################
-  # modify seqs_cov files for footprint profile prediction
-  # sum coverage across nucleotides for Dnase track
-  # write nucleotide level targets to separate h5s for footprint track
-  ################################################################
-  #dnase_ti = targets_df[targets_df["identifier"] == "DNAse"].index.values[0]
-  #dnase_targets = h5py.File(f"{seqs_cov_dir}/{dnase_ti}.h5", "r")["targets"][:,:].sum(axis=1, keepdims=True)
-  #seqs_cov_open = h5py.File(f"{seqs_cov_dir}/{dnase_ti}.h5", 'w')
-  #seqs_cov_open.create_dataset('targets', data=dnase_targets, dtype='float32')
-  #seqs_cov_open.close()
-
-  #footprint_ti = targets_df[targets_df["identifier"] == "vierstra_footprint"].index.values[0]
-  #footprint_targets = h5py.File(f"{seqs_cov_dir}/{footprint_ti}.h5", "r")["targets"][:,:]
-  #for footprint_nt in range(footprint_targets.shape[1]):
-  #  seqs_cov_open = h5py.File(f"{seqs_cov_dir}/{footprint_nt+1}.h5", 'w')
-  #  seqs_cov_open.create_dataset('targets', data=footprint_targets[:,footprint_nt].reshape(footprint_targets.shape[0], 1), dtype='float32')
-  #  seqs_cov_open.close()
-
-  ################################################################
   # write TF Records
   ################################################################
   # copy targets file
