@@ -16,6 +16,7 @@
 import time
 from packaging import version
 import pdb
+from functools import partial
 
 import numpy as np
 import tensorflow as tf
@@ -25,6 +26,7 @@ from tensorflow.python.framework import dtypes
 
 from basenji import layers
 from basenji import metrics
+import wandb
 
 class Trainer:
   def __init__(self, params, train_data, eval_data, out_dir):
@@ -40,8 +42,11 @@ class Trainer:
 
     # loss
     self.loss = self.params.get('loss','poisson').lower()
+    self.loss_weights = self.params.get('loss_weights', None) 
+    print("loss weights!!i", self.loss_weights) 
+    
     if self.loss == 'mse':
-      self.loss_fn = tf.keras.losses.MSE
+      self.loss_fn = tf.keras.losses.MeanSquaredError() 
     elif self.loss == 'bce':
       self.loss_fn = tf.keras.losses.BinaryCrossentropy()
     else:
@@ -65,6 +70,10 @@ class Trainer:
     for di in range(self.num_datasets):
       self.dataset_indexes += [di]*self.train_epoch_batches[di]
     self.dataset_indexes = np.array(self.dataset_indexes)
+    
+    wandb.tensorboard.patch(root_logdir=self.out_dir) 
+    wandb.init() 
+    #wandb.init(config=tf.compat.v1.flags.FLAGS, sync_tensorboard=True)
 
   def compile(self, seqnn_model):
     for model in seqnn_model.models:
@@ -73,8 +82,10 @@ class Trainer:
       else:
         num_targets = model.output_shape[-1]
         model_metrics = [metrics.PearsonR(num_targets), metrics.R2(num_targets)]
-      
+        #model_metrics = [[metrics.PearsonR(1, name='pearsonr_0')], [metrics.PearsonR(1, name='pearsonr_1')]]
+ 
       model.compile(loss=self.loss_fn,
+                    loss_weights=self.loss_weights,
                     optimizer=self.optimizer,
                     metrics=model_metrics)
     self.compiled = True
