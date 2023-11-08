@@ -43,14 +43,20 @@ class Trainer:
     # loss
     self.loss = self.params.get('loss','poisson').lower()
     self.loss_weights = self.params.get('loss_weights', None) 
-    print("loss weights!!i", self.loss_weights) 
+    self.alpha = self.params.get('alpha', 0.5)
+    print("alpha!!", self.alpha) 
     
+    self.loss = self.loss.lower()
     if self.loss == 'mse':
       self.loss_fn = tf.keras.losses.MeanSquaredError() 
     elif self.loss == 'bce':
       self.loss_fn = tf.keras.losses.BinaryCrossentropy()
+    elif self.loss == "poisson_mse":
+      self.loss_fn = metrics.poisson_target0_mse_target1_loss(self.alpha)
     else:
       self.loss_fn = tf.keras.losses.Poisson()
+    print(self.loss_fn)
+
 
     # optimizer
     self.make_optimizer()
@@ -81,9 +87,14 @@ class Trainer:
         model_metrics = [metrics.SeqAUC(curve='ROC'), metrics.SeqAUC(curve='PR')]
       else:
         num_targets = model.output_shape[-1]
-        model_metrics = [metrics.PearsonR(num_targets), metrics.R2(num_targets)]
-        #model_metrics = [[metrics.PearsonR(1, name='pearsonr_0')], [metrics.PearsonR(1, name='pearsonr_1')]]
- 
+        model_metrics = [metrics.PearsonR(num_targets, summarize=True),
+                         metrics.R2(num_targets, summarize=True),
+                         metrics.PearsonR(num_targets, summarize=False, target=0, name="target_0_pearsonr"),
+                         metrics.PearsonR(num_targets, summarize=False, target=1, name="target_1_pearsonr"),
+                         metrics.R2(num_targets, summarize=False, target=0, name="target_0_r2"),
+                         metrics.R2(num_targets, summarize=False, target=1, name="target_1_r2"),
+                         metrics.poisson_target0, metrics.mse_target1]
+
       model.compile(loss=self.loss_fn,
                     loss_weights=self.loss_weights,
                     optimizer=self.optimizer,

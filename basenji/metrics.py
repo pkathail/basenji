@@ -138,9 +138,10 @@ class SeqAUC(tf.keras.metrics.AUC):
 
 
 class PearsonR(tf.keras.metrics.Metric):
-  def __init__(self, num_targets, summarize=True, name='pearsonr', **kwargs):
+  def __init__(self, num_targets, summarize=True, name='pearsonr', target=None, **kwargs):
     super(PearsonR, self).__init__(name=name, **kwargs)
     self._summarize = summarize
+    self._target = target
     self._shape = (num_targets,)
     self._count = self.add_weight(name='count', shape=self._shape, initializer='zeros')
 
@@ -192,6 +193,8 @@ class PearsonR(tf.keras.metrics.Metric):
 
     if self._summarize:
         return tf.reduce_mean(correlation)
+    elif self._target:
+        return correlation[self._target]
     else:
         return correlation
 
@@ -200,9 +203,10 @@ class PearsonR(tf.keras.metrics.Metric):
 
 
 class R2(tf.keras.metrics.Metric):
-  def __init__(self, num_targets, summarize=True, name='r2', **kwargs):
+  def __init__(self, num_targets, summarize=True, name='r2', target=None, **kwargs):
     super(R2, self).__init__(name=name, **kwargs)
     self._summarize = summarize
+    self._target = target
     self._shape = (num_targets,)
     self._count = self.add_weight(name='count', shape=self._shape, initializer='zeros')
 
@@ -247,8 +251,35 @@ class R2(tf.keras.metrics.Metric):
 
     if self._summarize:
         return tf.reduce_mean(r2)
+    elif self._target:
+      return r2[self._target]
     else:
         return r2
 
   def reset_states(self):
     K.batch_set_value([(v, np.zeros(self._shape)) for v in self.variables])
+
+
+##########################
+# Task-specific metrics
+##########################
+def poisson_target0_mse_target1_loss(alpha=0.5):
+  def poisson_target0_mse_target1_loss_inner(y_true, y_pred, alpha=alpha):
+      target0_loss = poisson_target0(y_true, y_pred)
+      target1_loss = mse_target1(y_true, y_pred)
+      total_loss = alpha*target0_loss + (1-alpha)*target1_loss
+      return total_loss
+  return poisson_target0_mse_target1_loss_inner
+
+def poisson_target0(y_true, y_pred):
+    y_true = tf.cast(y_true[:,:,0], 'float32')
+    y_pred = tf.cast(y_pred[:,:,0], 'float32')
+    
+    return y_pred - y_true * tf.math.log(y_pred)
+
+
+def mse_target1(y_true, y_pred):
+    y_true = tf.cast(y_true[:,:,1], 'float32')
+    y_pred = tf.cast(y_pred[:,:,1], 'float32')
+
+    return tf.reduce_mean(tf.math.square(y_pred - y_true))
