@@ -94,7 +94,7 @@ def main():
 
   # initialize sequences coverage file
   seqs_cov_open = h5py.File(seqs_cov_file, 'w')
-  seqs_cov_open.create_dataset('targets', shape=(num_seqs, target_length), dtype='float32')
+  seqs_cov_open.create_dataset('targets', shape=(num_seqs, target_length), dtype='float16')
 
   # open genome coverage file
   genome_cov_open = CovFace(genome_cov_file)
@@ -134,15 +134,15 @@ def main():
     # sum pool
     seq_cov = seq_cov_nt.reshape(target_length, options.pool_width)
     if options.sum_stat == 'sum':
-      seq_cov = seq_cov.sum(axis=1, dtype='float32')
+      seq_cov = seq_cov.sum(axis=1, dtype='float16')
     elif options.sum_stat in ['mean', 'avg']:
-      seq_cov = seq_cov.mean(axis=1, dtype='float32')
+      seq_cov = seq_cov.mean(axis=1, dtype='float16')
     elif options.sum_stat == 'median':
       seq_cov = seq_cov.median(axis=1)
     elif options.sum_stat == 'max':
       seq_cov = seq_cov.max(axis=1)
     elif options.sum_stat == 'peak':
-      seq_cov = seq_cov.mean(axis=1, dtype='float32')
+      seq_cov = seq_cov.mean(axis=1, dtype='float16')
       seq_cov = np.clip(np.sqrt(seq_cov*4), 0, 1)
     else:
       print('ERROR: Unrecognized summary statistic "%s".' % options.sum_stat,
@@ -160,7 +160,7 @@ def main():
     seq_cov = options.scale * seq_cov
 
     # write
-    seqs_cov_open['targets'][si,:] = seq_cov.astype('float32')
+    seqs_cov_open['targets'][si,:] = seq_cov.astype('float16')
 
   # close genome coverage file
   genome_cov_open.close()
@@ -267,7 +267,7 @@ class CovFace:
 
   def read(self, chrm, start, end):
     if self.bigwig:
-      cov = self.cov_open.values(chrm, start, end, numpy=True).astype('float32')
+      cov = self.cov_open.values(chrm, start, end, numpy=True).astype('float16')
 
     else:
       if chrm in self.cov_open:
@@ -279,7 +279,7 @@ class CovFace:
       else:
         print("WARNING: %s doesn't see %s:%d-%d. Setting to all zeros." % \
           (self.cov_file, chrm, start, end), file=sys.stderr)
-        cov = np.zeros(end-start, dtype='float32')
+        cov = np.zeros(end-start, dtype='float16')
 
     return cov
 
