@@ -77,9 +77,9 @@ class Trainer:
       self.dataset_indexes += [di]*self.train_epoch_batches[di]
     self.dataset_indexes = np.array(self.dataset_indexes)
     
-    wandb.tensorboard.patch(root_logdir=self.out_dir) 
-    wandb.init() 
-    #wandb.init(config=tf.compat.v1.flags.FLAGS, sync_tensorboard=True)
+    # wandb.tensorboard.patch(root_logdir=self.out_dir) 
+    # wandb.init() 
+    wandb.init(config=tf.compat.v1.flags.FLAGS, sync_tensorboard=True)
 
   def compile(self, seqnn_model):
     for model in seqnn_model.models:
@@ -87,13 +87,30 @@ class Trainer:
         model_metrics = [metrics.SeqAUC(curve='ROC'), metrics.SeqAUC(curve='PR')]
       else:
         num_targets = model.output_shape[-1]
-        model_metrics = [metrics.PearsonR(num_targets, summarize=True),
-                         metrics.R2(num_targets, summarize=True),
-                         metrics.PearsonR(num_targets, summarize=False, target=0, name="target_0_pearsonr"),
-                         metrics.PearsonR(num_targets, summarize=False, target=1, name="target_1_pearsonr"),
-                         metrics.R2(num_targets, summarize=False, target=0, name="target_0_r2"),
-                         metrics.R2(num_targets, summarize=False, target=1, name="target_1_r2"),
-                         metrics.poisson_target0, metrics.mse_target1]
+        if self.loss == "poisson_mse":
+          model_metrics = [metrics.PearsonR(num_targets, summarize=True),
+                          metrics.R2(num_targets, summarize=True),
+                          metrics.PearsonR(num_targets, summarize=False, target=0, name="target_0_pearsonr"),
+                          metrics.PearsonR(num_targets, summarize=False, target=1, name="target_1_pearsonr"),
+                          metrics.R2(num_targets, summarize=False, target=0, name="target_0_r2"),
+                          metrics.R2(num_targets, summarize=False, target=1, name="target_1_r2"),
+                          metrics.poisson_per_target(target=0, name="poisson_target0"), 
+                          metrics.mse_per_target(target=1, name="mse_target1")]
+        elif self.loss == "poisson" and num_targets == 1:
+          model_metrics = [metrics.PearsonR(num_targets, summarize=True),
+                          metrics.R2(num_targets, summarize=True),
+                          metrics.PearsonR(num_targets, summarize=False, target=0, name="target_0_pearsonr"),
+                          metrics.R2(num_targets, summarize=False, target=0, name="target_0_r2"),
+                          metrics.poisson_per_target(target=0, name="poisson_target0")]
+        elif self.loss == "mse" and num_targets == 1:
+          model_metrics = [metrics.PearsonR(num_targets, summarize=True),
+                          metrics.R2(num_targets, summarize=True),
+                          metrics.PearsonR(num_targets, summarize=False, target=0, name="target_1_pearsonr"),
+                          metrics.R2(num_targets, summarize=False, target=0, name="target_1_r2"),
+                          metrics.mse_per_target(target=0, name="mse_target1")]
+        else:
+          model_metrics = [metrics.PearsonR(num_targets, summarize=True),
+                           metrics.R2(num_targets, summarize=True)]
 
       model.compile(loss=self.loss_fn,
                     loss_weights=self.loss_weights,

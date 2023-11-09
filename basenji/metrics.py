@@ -271,15 +271,26 @@ def poisson_target0_mse_target1_loss(alpha=0.5):
       return total_loss
   return poisson_target0_mse_target1_loss_inner
 
-def poisson_target0(y_true, y_pred):
-    y_true = tf.cast(y_true[:,:,0], 'float32')
-    y_pred = tf.cast(y_pred[:,:,0], 'float32')
+
+def poisson_per_target(target, name=None):
+  def poisson_per_target_inner(y_true, y_pred, target=target):
+    y_true = tf.cast(y_true[:,:,target], 'float32')
+    y_pred = tf.cast(y_pred[:,:,target], 'float32')
     
     return y_pred - y_true * tf.math.log(y_pred)
 
+  if name is not None:
+    poisson_per_target_inner.__name__ = name
+  return poisson_per_target_inner
 
-def mse_target1(y_true, y_pred):
-    y_true = tf.cast(y_true[:,:,1], 'float32')
-    y_pred = tf.cast(y_pred[:,:,1], 'float32')
+
+def mse_per_target(target, name=None):
+  def mse_per_target_inner(y_true, y_pred, target=target):
+    y_true = tf.cast(y_true[:,:,target], 'float32')
+    y_pred = tf.cast(y_pred[:,:,target], 'float32')
 
     return tf.reduce_mean(tf.math.square(y_pred - y_true))
+
+  if name is not None:
+    mse_per_target_inner.__name__ = name
+  return mse_per_target_inner
