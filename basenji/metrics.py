@@ -265,6 +265,8 @@ class R2(tf.keras.metrics.Metric):
 ##########################
 def poisson_target0_mse_target1_loss(alpha=0.5):
   def poisson_target0_mse_target1_loss_inner(y_true, y_pred, alpha=alpha):
+      poisson_target0 = poisson_per_target(0)
+      mse_target1 = mse_per_target(1)  
       target0_loss = poisson_target0(y_true, y_pred)
       target1_loss = mse_target1(y_true, y_pred)
       total_loss = alpha*target0_loss + (1-alpha)*target1_loss

@@ -243,9 +243,11 @@ def regplot(vals1,
   if tight:
     plt.tight_layout()
 
-  plt.savefig(out_pdf)
-  plt.close()
-
+  if out_pdf is not None:
+    plt.savefig(out_pdf)
+    plt.close()
+  else:
+    plt.show()
 
 def scatter_lims(vals1, vals2=None, buffer=.05):
   if vals2 is not None:

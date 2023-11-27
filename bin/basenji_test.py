@@ -39,6 +39,7 @@ import seaborn as sns
 from basenji import dataset
 from basenji import plots
 from basenji import seqnn
+from basenji import metrics
 
 if tf.__version__[0] == '1':
   tf.compat.v1.enable_eager_execution()
@@ -129,6 +130,8 @@ def main():
   # evaluate
 
   eval_loss = params_train.get('loss', 'poisson')
+  if eval_loss == "poisson_mse":
+    eval_loss = metrics.poisson_target0_mse_target1_loss(params_train.get('alpha', None))
 
   # evaluate
   test_loss, test_metric1, test_metric2 = seqnn_model.evaluate(eval_data, loss=eval_loss)
