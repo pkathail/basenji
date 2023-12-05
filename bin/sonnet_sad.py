@@ -49,6 +49,9 @@ using a saved Sonnet model.
 def main():
   usage = 'usage: %prog [options] <model> <vcf_file>'
   parser = OptionParser(usage)
+  parser.add_option('-b', dest='batch_size',
+      default=4, type='int',
+      help='Batch size [Default: %default]') 
   parser.add_option('-f', dest='genome_fasta',
       default='%s/data/hg19.fa' % os.environ['BASENJIDIR'],
       help='Genome FASTA for sequences [Default: %default]')
@@ -148,9 +151,6 @@ def main():
     target_labels = targets_df.description
     target_slice = targets_df.index
 
-  if options.penultimate:
-    parser.error('Not implemented for TF2')
-
   #################################################################
   # setup model
 
@@ -201,7 +201,7 @@ def main():
 
   # initialize predictions stream
   preds_stream = PredStreamGen(seqnn_model, snp_gen(),
-  	rc=options.rc, shifts=options.shifts, species=options.species)
+  	rc=options.rc, shifts=options.shifts, species=options.species, batch_size=options.batch_size)
 
   # predictions index
   pi = 0
