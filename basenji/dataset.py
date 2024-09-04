@@ -26,14 +26,16 @@ import tensorflow as tf
 # TFRecord constants
 TFR_INPUT = 'sequence'
 TFR_OUTPUT = 'target'
+TFR_PHYLOP = 'phylop'
 
 def file_to_records(filename):
   return tf.data.TFRecordDataset(filename, compression_type='ZLIB')
 
 
 class SeqDataset:
+
   def __init__(self, data_dir, split_label, batch_size, shuffle_buffer=128,
-               seq_length_crop=None, mode='eval', tfr_pattern=None):
+               seq_length_crop=None, mode='eval', tfr_pattern=None, phylop=False):
     """Initialize basic parameters; run compute_stats; run make_dataset."""
 
     self.data_dir = data_dir
@@ -43,6 +45,7 @@ class SeqDataset:
     self.seq_length_crop = seq_length_crop
     self.mode = mode
     self.tfr_pattern = tfr_pattern
+    self.phylop = phylop
 
     # read data parameters
     data_stats_file = '%s/statistics.json' % self.data_dir
@@ -64,6 +67,7 @@ class SeqDataset:
         self.num_seqs = data_stats['%s_seq' % self.split_label] 
     else:
       self.tfr_path = '%s/tfrecords/%s' % (self.data_dir, self.tfr_pattern)
+      # self.num_seqs = 128
       self.compute_stats()
 
     self.make_dataset()
@@ -79,10 +83,17 @@ class SeqDataset:
       """Parse TFRecord protobuf."""
 
       # define features
-      features = {
-        TFR_INPUT: tf.io.FixedLenFeature([], tf.string),
-        TFR_OUTPUT: tf.io.FixedLenFeature([], tf.string)
-      }
+      if self.phylop:
+        features = {
+          TFR_INPUT: tf.io.FixedLenFeature([], tf.string),
+          TFR_PHYLOP: tf.io.FixedLenFeature([], tf.string),
+          TFR_OUTPUT: tf.io.FixedLenFeature([], tf.string)
+        }
+      else:
+        features = {
+          TFR_INPUT: tf.io.FixedLenFeature([], tf.string),
+          TFR_OUTPUT: tf.io.FixedLenFeature([], tf.string)
+        }
 
       # parse example into features
       parsed_features = tf.io.parse_single_example(example_protos, features=features)
@@ -106,6 +117,15 @@ class SeqDataset:
       if not raw:
         targets = tf.reshape(targets, [self.target_length, self.num_targets])
         targets = tf.cast(targets, tf.float32)
+
+      # decode phylop
+      if self.phylop:
+        phylop = tf.io.decode_raw(parsed_features[TFR_PHYLOP], tf.float16)
+        if not raw:
+          phylop = tf.expand_dims(phylop, axis=1)
+          phylop = tf.cast(phylop, tf.float32)
+          sequence = tf.cast(sequence, phylop.dtype)
+          sequence = tf.concat([sequence, phylop], axis=1)
 
       return sequence, targets
 
