@@ -31,6 +31,8 @@ from tensorflow.python.framework import dtypes
 from basenji import layers
 from basenji import metrics
 
+import wandb
+
 def parse_loss(loss_label, strategy=None, keras_fit=True, spec_weight=1, total_weight=1):
   """Parse loss function from label, strategy, and fitting method."""
   if strategy is not None and not keras_fit:
@@ -99,6 +101,8 @@ class Trainer:
 
     # optimizer
     self.make_optimizer()
+
+    wandb.init(config=tf.compat.v1.flags.FLAGS, sync_tensorboard=True)
 
   def compile(self, seqnn_model):
     for model in seqnn_model.models:
