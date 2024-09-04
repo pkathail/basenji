@@ -28,6 +28,7 @@ import tensorflow as tf
 from tensorflow.keras import mixed_precision
 if tf.__version__[0] == '1':
   tf.compat.v1.enable_eager_execution()
+print(tf.config.list_physical_devices('GPU'))
 
 from basenji import dataset
 from basenji import seqnn
