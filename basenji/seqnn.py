@@ -108,7 +108,7 @@ class SeqNN():
     ###################################################
     # inputs
     ###################################################
-    sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
+    sequence = tf.keras.Input(shape=(self.seq_length, self.seq_depth), name='sequence')
     current = sequence
 
     # augmentation
@@ -227,7 +227,7 @@ class SeqNN():
     """ Build ensemble of models computing on augmented input sequences. """
     if ensemble_rc or len(ensemble_shifts) > 1:
       # sequence input
-      sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
+      sequence = tf.keras.Input(shape=(self.seq_length, self.seq_depth), name='sequence')
       sequences = [sequence]
 
       if len(ensemble_shifts) > 1:
@@ -261,7 +261,7 @@ class SeqNN():
 
   def build_sad(self):
     # sequence input
-    sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
+    sequence = tf.keras.Input(shape=(self.seq_length, self.seq_depth), name='sequence')
 
     # predict
     predictions = self.model(sequence)
@@ -277,7 +277,7 @@ class SeqNN():
   def build_slice(self, target_slice=None, target_sum=False):
     if target_slice is not None or target_sum:
       # sequence input
-      sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
+      sequence = tf.keras.Input(shape=(self.seq_length, self.seq_depth), name='sequence')
 
       # predict
       predictions = self.model(sequence)
@@ -309,7 +309,7 @@ class SeqNN():
       model = self.model
 
     # sequence input
-    sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
+    sequence = tf.keras.Input(shape=(self.seq_length, self.seq_depth), name='sequence')
 
     # predict and downcast
     preds = model(sequence)
@@ -406,7 +406,7 @@ class SeqNN():
     grads = []
     for bi in range(num_batches):
       # sequence input
-      sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
+      sequence = tf.keras.Input(shape=(self.seq_length, self.seq_depth), name='sequence')
 
       # predict
       predictions = model(sequence)
@@ -556,7 +556,7 @@ class SeqNN():
       model = self.model
 
     # sequence input
-    sequence = tf.keras.Input(shape=(self.seq_length, 4), name='sequence')
+    sequence = tf.keras.Input(shape=(self.seq_length, self.seq_depth), name='sequence')
 
     # predict and step across positions
     preds = model(sequence)
