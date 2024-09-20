@@ -16,6 +16,7 @@
 import time
 from packaging import version
 import pdb
+import os
 
 import numpy as np
 import tensorflow as tf
@@ -102,7 +103,7 @@ class Trainer:
     # optimizer
     self.make_optimizer()
 
-    wandb.init(config=tf.compat.v1.flags.FLAGS, sync_tensorboard=True)
+    self.run = wandb.init(config=tf.compat.v1.flags.FLAGS, sync_tensorboard=True, resume="allow")
 
   def compile(self, seqnn_model):
     for model in seqnn_model.models:
@@ -306,13 +307,26 @@ class Trainer:
       managers.append(manager)
 
     # improvement variables
-    valid_best = [-np.inf]*self.num_datasets
-    unimproved = [0]*self.num_datasets
+    # valid_best = [-np.inf]*self.num_datasets
+    # unimproved = [0]*self.num_datasets
+
+    # phylop model after Epoch 87  
+    valid_best = [0.6124, 0.7024]
+    unimproved = [15, 19]
 
     ################################################################
     # training loop
 
     first_step = True
+
+    cols = ["epoch", "train/dataset_0_loss", "train/dataset_0_pearsonr", "train/dataset_0_r2",
+                "train/dataset_1_loss", "train/dataset_1_pearsonr", "train/dataset_1_r2",
+                "validation/dataset_0_loss", "validation/dataset_0_pearsonr", "validation/dataset_0_r2",
+                "validation/dataset_1_loss", "validation/dataset_1_pearsonr", "validation/dataset_1_r2"]
+    if not os.path.exists(f"{self.out_dir}/training_stats.txt"):
+      with open(f"{self.out_dir}/training_stats.txt", "a") as f:
+        f.write("\t".join(cols) + "\n")
+        
     for ei in range(epoch_start, self.train_epochs_max):
       if ei >= self.train_epochs_min and np.min(unimproved) > self.patience:
         break
@@ -340,8 +354,10 @@ class Trainer:
           if first_step:
             print('Successful first step!', flush=True)
             first_step = False
-            
+        
+        
         print('Epoch %d - %ds' % (ei, (time.time()-t0)))
+        wandb_metrics = {"epoch": ei}
         for di in range(self.num_datasets):
           print('  Data %d' % di, end='')
           model = seqnn_model.models[di]          
@@ -349,8 +365,11 @@ class Trainer:
           # print training accuracy
           print(' - train_loss: %.4f' % train_loss[di].result().numpy(), end='')
           print(' - train_r: %.4f' %  train_r[di].result().numpy(), end='')
-          print(' - train_r: %.4f' %  train_r2[di].result().numpy(), end='')
-
+          print(' - train_r2: %.4f' %  train_r2[di].result().numpy(), end='')
+          wandb_metrics[f"train/dataset_{di}_loss"] = train_loss[di].result().numpy()
+          wandb_metrics[f"train/dataset_{di}_pearsonr"] = train_r[di].result().numpy()
+          wandb_metrics[f"train/dataset_{di}_r2"] = train_r2[di].result().numpy()
+          
           # evaluate
           for x, y in self.eval_data[di].dataset:
             if self.strategy is None:
@@ -368,6 +387,9 @@ class Trainer:
           print(' - valid_loss: %.4f' % valid_loss[di].result().numpy(), end='')
           print(' - valid_r: %.4f' % valid_r[di].result().numpy(), end='')
           print(' - valid_r2: %.4f' % valid_r2[di].result().numpy(), end='')
+          wandb_metrics[f"validation/dataset_{di}_loss"] = valid_loss[di].result().numpy()
+          wandb_metrics[f"validation/dataset_{di}_pearsonr"] = valid_r[di].result().numpy()
+          wandb_metrics[f"validation/dataset_{di}_r2"] = valid_r2[di].result().numpy()
           early_stop_stat = valid_r[di].result().numpy()
 
           # checkpoint
@@ -393,6 +415,9 @@ class Trainer:
           valid_loss[di].reset_states()
           valid_r[di].reset_states()
           valid_r2[di].reset_states()
+        self.run.log(wandb_metrics)
+        with open(f"{self.out_dir}/training_stats.txt", "a") as f:
+          f.write("\t".join([str(wandb_metrics[c]) for c in cols]) + "\n")
 
         
   def fit_tape(self, seqnn_model):

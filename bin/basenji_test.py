@@ -140,7 +140,9 @@ def main():
     split_label=options.split_label,
     batch_size=params_train['batch_size'],
     mode='eval',
-    tfr_pattern=options.tfr_pattern)
+    tfr_pattern=options.tfr_pattern,
+    phylop=params_train.get('phylop', False),
+    target_slice=params_train.get('target_slice', None))
 
   # initialize model
   seqnn_model = seqnn.SeqNN(params_model)

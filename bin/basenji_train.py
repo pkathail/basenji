@@ -110,14 +110,18 @@ def main():
     batch_size=params_train['batch_size'],
     shuffle_buffer=params_train.get('shuffle_buffer', 128),
     mode='train',
-    tfr_pattern=options.tfr_train_pattern))
+    tfr_pattern=options.tfr_train_pattern,
+    phylop=params_train.get('phylop', False),
+    target_slice=params_train.get('target_slice', None)))
 
     # load eval data
     eval_data.append(dataset.SeqDataset(data_dir,
     split_label='valid',
     batch_size=params_train['batch_size'],
     mode='eval',
-    tfr_pattern=options.tfr_eval_pattern))
+    tfr_pattern=options.tfr_eval_pattern,
+    phylop=params_train.get('phylop', False),
+    target_slice=params_train.get('target_slice', None)))
 
   params_model['strand_pair'] = strand_pairs
 

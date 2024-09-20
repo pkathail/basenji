@@ -35,7 +35,7 @@ def file_to_records(filename):
 class SeqDataset:
 
   def __init__(self, data_dir, split_label, batch_size, shuffle_buffer=128,
-               seq_length_crop=None, mode='eval', tfr_pattern=None, phylop=False):
+               seq_length_crop=None, mode='eval', tfr_pattern=None, phylop=False, target_slice=None):
     """Initialize basic parameters; run compute_stats; run make_dataset."""
 
     self.data_dir = data_dir
@@ -46,6 +46,7 @@ class SeqDataset:
     self.mode = mode
     self.tfr_pattern = tfr_pattern
     self.phylop = phylop
+    self.target_slice = target_slice
 
     # read data parameters
     data_stats_file = '%s/statistics.json' % self.data_dir
@@ -117,7 +118,9 @@ class SeqDataset:
       if not raw:
         targets = tf.reshape(targets, [self.target_length, self.num_targets])
         targets = tf.cast(targets, tf.float32)
-
+        if self.target_slice is not None:
+            targets = tf.gather(targets, self.target_slice, axis=-1)
+          
       # decode phylop
       if self.phylop:
         phylop = tf.io.decode_raw(parsed_features[TFR_PHYLOP], tf.float16)

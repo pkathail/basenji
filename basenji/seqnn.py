@@ -14,6 +14,7 @@
 # =========================================================================
 from __future__ import print_function
 
+import os
 import pdb
 import sys
 import time
@@ -534,6 +535,10 @@ class SeqNN():
     """ Restore weights from saved model. """
     if trunk:
       self.model_trunk.load_weights(model_file)
+    elif os.path.isdir(model_file):
+      self.models[0].load_weights(f"{model_file}/model0_check.h5")
+      self.models[1].load_weights(f"{model_file}/model1_check.h5")  
+      self.model = self.models[0]
     else:
       self.models[head_i].load_weights(model_file)
       self.model = self.models[head_i]
