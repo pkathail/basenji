@@ -31,6 +31,8 @@ from scipy.sparse import dok_matrix
 from scipy.special import rel_entr
 import tensorflow as tf
 from tqdm import tqdm
+import pyBigWig
+from copy import deepcopy
 
 from basenji import seqnn
 from basenji import stream
@@ -50,6 +52,12 @@ def main():
   parser = OptionParser(usage)
   parser.add_option('-f', dest='genome_fasta',
       default='%s/data/hg38.fa' % os.environ['BASENJIDIR'],
+      help='Genome FASTA for sequences [Default: %default]')
+  parser.add_option('-g', dest='genome_file',
+      default="/clusterfs/nilah/pooja/genomes/human.hg38.genome",
+      help='Chromosome length information [Default: %default]')
+  parser.add_option('--ph', dest='phylop_bigwig',
+      default="/clusterfs/nilah/ruchir/data/conservation/241-mammalian-2020v2.bigWig",
       help='Genome FASTA for sequences [Default: %default]')
   parser.add_option('-o',dest='out_dir',
       default='sad',
@@ -72,6 +80,12 @@ def main():
   parser.add_option('--training_mode', dest='training_mode',
       default=False, action='store_true',
       help='Make predictions in training mode.  [Default: %default]')
+  parser.add_option('--phylop_channel', dest='phylop_channel',
+      default='original_phylop', type='str',
+      help='How to mask phylop input channel. Options: original_phylop, recomputed_phylop, full_mask, variant_mask')
+  parser.add_option('--phylop_smooth', dest='phylop_smooth',
+      default=1, type='int',
+      help='')
   (options, args) = parser.parse_args()
 
   if len(args) == 3:
@@ -82,6 +96,7 @@ def main():
 
   elif len(args) == 4:
     # multi separate
+    print(args) 
     options_pkl_file = args[0]
     params_file = args[1]
     model_file = args[2]
@@ -119,6 +134,15 @@ def main():
 
   if not os.path.isdir(options.out_dir):
     os.mkdir(options.out_dir)
+
+  # if os.path.exists(f"{options.out_dir}/sad.h5"):
+  #   try:
+  #     sad_h5 = h5py.File(f"{options.out_dir}/sad.h5", "r")
+  #     if all(sad_h5["SAD"][:,:].sum(axis=1) != 0):
+  #       print("All predictions already generated")
+  #       return
+  #   except:
+  #     pass
 
   options.shifts = [int(shift) for shift in options.shifts.split(',')]
   options.sad_stats = options.sad_stats.split(',')
@@ -186,6 +210,8 @@ def main():
       'identifier':target_ids,
       'description':target_labels})
 
+  print(options.out_dir)
+
   #################################################################
   # load SNPs
 
@@ -205,6 +231,15 @@ def main():
 
   # open genome FASTA
   genome_open = pysam.Fastafile(options.genome_fasta)
+  chr_lengths = pd.read_csv(options.genome_file, sep="\t", names=["chr","length"], index_col=0)
+  phylop_bw = pyBigWig.open(options.phylop_bigwig)
+  phylop_mean = phylop_bw.header()["sumData"]/phylop_bw.header()["nBasesCovered"]
+  ref_phylop_scores = pd.concat([pd.read_csv(f"/global/scratch/users/poojakathail/conservation/gtex_eqtl_set_alignments/all_tissues_combined.ref.chr{chr}.gff",
+                                             sep="\t", usecols=[0,3,5], names=["chr", "pos", "phylop"])
+                                 for chr in list(range(1, 23)) + ['X']])
+  alt_phylop_scores = pd.concat([pd.read_csv(f"/global/scratch/users/poojakathail/conservation/gtex_eqtl_set_alignments/all_tissues_combined.alt.chr{chr}.gff",
+                                             sep="\t", usecols=[0,3,5], names=["chr", "pos", "phylop"])
+                                 for chr in list(range(1, 23)) + ['X']])
 
   #################################################################
   # predict SNP scores, write output
@@ -217,6 +252,55 @@ def main():
     # get SNP sequences
     snp_1hot_list = bvcf.snp_seq1(snp, params_model['seq_length'], genome_open)
     snps_1hot = np.array(snp_1hot_list)
+
+    if params_train.get('phylop', False) is not False:
+      options.phylop_smooth = [int(p) for p in options.phylop_smooth.split(",")]
+      left_len = params_model['seq_length'] // 2 - 1
+      right_len = params_model['seq_length'] // 2
+      seq_start = snp.pos - left_len
+      seq_end = snp.pos + right_len + max(0, len(snp.ref_allele) - snp.longest_alt())
+
+      if options.phylop_channel == 'full_mask':
+        seq_phylop = np.array([phylop_mean]*params_model['seq_length'])
+        alt_seq_phylop = np.array([phylop_mean]*params_model['seq_length'])
+      else:
+        if seq_start < 0:
+          seq_phylop = np.array([phylop_mean]*(1-seq_start) + phylop_bw.values(snp.chr, 0, seq_end))
+        elif seq_end > chr_lengths.loc[snp.chr, "length"]:
+          seq_phylop = np.array(phylop_bw.values(snp.chr, seq_start - 1, chr_lengths.loc[snp.chr, "length"]) + [phylop_mean]*(seq_end - chr_lengths.loc[snp.chr, "length"]))  
+        else:
+          seq_phylop = np.array(phylop_bw.values(snp.chr, seq_start - 1, seq_end))
+
+        alt_seq_phylop = deepcopy(seq_phylop)
+        if options.phylop_channel == 'recomputed_phylop':
+          ref_allele_phylop = ref_phylop_scores.loc[(ref_phylop_scores["chr"] == snp.chr) &
+                                                  (ref_phylop_scores["pos"] == snp.pos), "phylop"].values[0]
+          alt_allele_phylop = alt_phylop_scores.loc[(alt_phylop_scores["chr"] == snp.chr) &
+                                                  (alt_phylop_scores["pos"] == snp.pos), "phylop"].values[0]
+          seq_phylop[left_len:left_len + len(snp.ref_allele)] = ref_allele_phylop
+          alt_seq_phylop[left_len:left_len + len(snp.ref_allele)] = alt_allele_phylop
+        elif options.phylop_channel == 'variant_mask':
+          seq_phylop[left_len:left_len + len(snp.ref_allele)] = phylop_mean
+          alt_seq_phylop[left_len:left_len + len(snp.ref_allele)] = phylop_mean
+
+        seq_phylop[np.isnan(seq_phylop)] = phylop_mean
+        alt_seq_phylop[np.isnan(alt_seq_phylop)] = phylop_mean
+
+      seq_phylop_all = []
+      alt_seq_phylop_all = []
+      for phylop_smooth_val in options.phylop_smooth:
+        if phylop_smooth_val > 1:
+          seq_phylop_i = np.convolve(seq_phylop, np.ones(phylop_smooth_val+1)/(phylop_smooth_val+1), mode="same")
+          alt_seq_phylop_i = np.convolve(alt_seq_phylop, np.ones(phylop_smooth_val+1)/(phylop_smooth_val+1), mode="same")
+        else:
+          seq_phylop_i = seq_phylop
+          alt_seq_phylop_i = alt_seq_phylop
+        seq_phylop_all.append(seq_phylop_i.reshape(-1, 1))
+        alt_seq_phylop_all.append(alt_seq_phylop_i.reshape(-1, 1))
+      seq_phylop = np.hstack(seq_phylop_all)
+      alt_seq_phylop = np.hstack(alt_seq_phylop_all)
+
+      snps_1hot = np.concatenate([snps_1hot, np.stack([seq_phylop, alt_seq_phylop])], axis=2)
 
     # get predictions
     if params_train['batch_size'] == 1:

@@ -1127,8 +1127,9 @@ class EnsembleReverseComplement(tf.keras.layers.Layer):
 
     ens_seqs_1hot = []
     for seq_1hot in seqs_1hot:
-      if seq_1hot.shape[-1] == 5:
-        rc_seq_1hot = tf.gather(seq_1hot, [3, 2, 1, 0, 4], axis=-1)
+      if seq_1hot.shape[-1] > 4:
+        axis_order = [3, 1, 2, 0] + list(range(4, seq_1hot.shape[-1]))
+        rc_seq_1hot = tf.gather(seq_1hot, axis_order, axis=-1)
       else:
         rc_seq_1hot = tf.gather(seq_1hot, [3, 2, 1, 0], axis=-1)
       rc_seq_1hot = tf.reverse(rc_seq_1hot, axis=[1])
@@ -1142,8 +1143,9 @@ class StochasticReverseComplement(tf.keras.layers.Layer):
     super(StochasticReverseComplement, self).__init__()
   def call(self, seq_1hot, training=None):
     if training:
-      if seq_1hot.shape[-1] == 5:
-        rc_seq_1hot = tf.gather(seq_1hot, [3, 2, 1, 0, 4], axis=-1)
+      if seq_1hot.shape[-1] > 4:
+        axis_order = [3, 1, 2, 0] + list(range(4, seq_1hot.shape[-1]))
+        rc_seq_1hot = tf.gather(seq_1hot, axis_order, axis=-1)
       else:
         rc_seq_1hot = tf.gather(seq_1hot, [3, 2, 1, 0], axis=-1)
       rc_seq_1hot = tf.reverse(rc_seq_1hot, axis=[1])

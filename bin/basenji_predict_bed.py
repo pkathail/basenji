@@ -61,6 +61,15 @@ def main():
   parser.add_option('-f', dest='genome_fasta',
       default=None,
       help='Genome FASTA for sequences [Default: %default]')
+  parser.add_option('--ph', dest='phylop_bigwig',
+      default="/clusterfs/nilah/ruchir/data/conservation/241-mammalian-2020v2.bigWig",
+      help='Genome FASTA for sequences [Default: %default]')
+  parser.add_option('--phylop_mask', dest='phylop_mask',
+      default=False, action='store_true',
+      help='')
+  parser.add_option('--phylop_smooth', dest='phylop_smooth',
+      default="1", type='str',
+      help='')
   parser.add_option('-g', dest='genome_file',
       default=None,
       help='Chromosome length information [Default: %default]')
@@ -85,6 +94,9 @@ def main():
   parser.add_option('-t', dest='targets_file',
       default=None, type='str',
       help='File specifying target indexes and labels in table format')
+  parser.add_option('-r', dest='receptive_field',
+      default=None, type='int',
+      help='Receptive field to use')
   (options, args) = parser.parse_args()
 
   if len(args) == 3:
@@ -130,6 +142,7 @@ def main():
   with open(params_file) as params_open:
     params = json.load(params_open)
   params_model = params['model']
+  params_train = params['train']
 
   if options.targets_file is None:
     target_slice = None
@@ -169,9 +182,42 @@ def main():
     bed_file, options.genome_fasta,
     params_model['seq_length'], stranded=False)
 
+  if params_train.get('phylop', False) is not False:
+      phylop_bw = pyBigWig.open(options.phylop_bigwig)
+      phylop_mean = phylop_bw.header()["sumData"]/phylop_bw.header()["nBasesCovered"]
+      options.phylop_smooth = [int(p) for p in options.phylop_smooth.split(",")]
+
+      model_seqs_phylop = []
+      for seq_chr, seq_start, seq_end in model_seqs_coords:
+          if options.phylop_mask:
+              seq_phylop = np.array([phylop_mean]*params_model['seq_length'])
+              seq_phylop = seq_phylop.reshape(-1, 1)
+          else:
+            seq_phylop = []
+            for phylop_smooth_val in options.phylop_smooth:
+              seq_phylop_i = np.array(phylop_bw.values(seq_chr, seq_start - phylop_smooth_val//2, 
+                                                       seq_end + phylop_smooth_val//2))
+              seq_phylop_i[np.isnan(seq_phylop_i)] = phylop_mean
+              if phylop_smooth_val > 1:
+                seq_phylop_i = np.convolve(seq_phylop_i, np.ones(phylop_smooth_val+1)/(phylop_smooth_val+1), mode="valid")
+              seq_phylop_i = seq_phylop_i.reshape(-1, 1)
+              seq_phylop.append(seq_phylop_i)
+            seq_phylop = np.hstack(seq_phylop)
+          model_seqs_phylop.append(seq_phylop)
+  else:
+      model_seqs_phylop = None
+
+  if options.receptive_field is not None:
+      for seq_i in range(len(model_seqs_dna)):
+          midpoint = int(params_model['seq_length'] // 2)
+          receptive_field_start = midpoint - int(options.receptive_field//2)
+          receptive_field_end = midpoint + int(options.receptive_field//2)
+          model_seqs_dna[seq_i] = 'N'*receptive_field_start + model_seqs_dna[seq_i][receptive_field_start:receptive_field_end] + 'N'*receptive_field_start
+          assert len(model_seqs_dna[seq_i]) == params_model['seq_length']
+
   # construct site coordinates
   site_seqs_coords = bed.read_bed_coords(bed_file, options.site_length)
-
+          
   # filter for worker SNPs
   if options.processes is not None:
     worker_bounds = np.linspace(0, len(model_seqs_dna), options.processes+1, dtype='int')
@@ -224,8 +270,11 @@ def main():
 
   # define sequence generator
   def seqs_gen():
-    for seq_dna in model_seqs_dna:
-      yield dna_io.dna_1hot(seq_dna)
+    for i, seq_dna in enumerate(model_seqs_dna):
+      seq_1hot = dna_io.dna_1hot(seq_dna)
+      if params_train.get('phylop', False) is not False:
+        seq_1hot = np.hstack([seq_1hot, model_seqs_phylop[i]])
+      yield seq_1hot
 
   # predict
   preds_stream = stream.PredStreamGen(seqnn_model, seqs_gen(), params['train']['batch_size'])

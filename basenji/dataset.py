@@ -35,7 +35,7 @@ def file_to_records(filename):
 class SeqDataset:
 
   def __init__(self, data_dir, split_label, batch_size, shuffle_buffer=128,
-               seq_length_crop=None, mode='eval', tfr_pattern=None, phylop=False, target_slice=None):
+               seq_length_crop=None, mode='eval', tfr_pattern=None, phylop=False, target_slice=None, phylop_smooth=None):
     """Initialize basic parameters; run compute_stats; run make_dataset."""
 
     self.data_dir = data_dir
@@ -47,6 +47,7 @@ class SeqDataset:
     self.tfr_pattern = tfr_pattern
     self.phylop = phylop
     self.target_slice = target_slice
+    self.phylop_smooth = phylop_smooth
 
     # read data parameters
     data_stats_file = '%s/statistics.json' % self.data_dir
@@ -125,8 +126,27 @@ class SeqDataset:
       if self.phylop:
         phylop = tf.io.decode_raw(parsed_features[TFR_PHYLOP], tf.float16)
         if not raw:
-          phylop = tf.expand_dims(phylop, axis=1)
-          phylop = tf.cast(phylop, tf.float32)
+          if self.phylop_smooth is not None:
+            phylop_smooth_all = []
+            for phylop_smooth_val in self.phylop_smooth:
+              if phylop_smooth_val > 1:
+                left_pad = tf.repeat(phylop[0], phylop_smooth_val//2)
+                right_pad = tf.repeat(phylop[-1], phylop_smooth_val//2)
+                phylop_smooth = tf.concat([left_pad, phylop, right_pad], axis=0)
+                phylop_smooth = tf.reshape(phylop_smooth, (1, len(phylop_smooth), 1))
+                phylop_smooth = tf.squeeze(tf.nn.avg_pool1d(phylop_smooth, 
+                                                            phylop_smooth_val+1, 
+                                                            strides=1, padding="VALID"))
+              else:
+                phylop_smooth = phylop
+              phylop_smooth = tf.expand_dims(phylop_smooth, axis=1)
+              phylop_smooth = tf.cast(phylop_smooth, tf.float32)
+              phylop_smooth_all.append(phylop_smooth)
+            phylop = tf.concat(phylop_smooth_all, axis=1)
+          else:
+            phylop = tf.expand_dims(phylop, axis=1)
+            phylop = tf.cast(phylop, tf.float32)
+
           sequence = tf.cast(sequence, phylop.dtype)
           sequence = tf.concat([sequence, phylop], axis=1)
 

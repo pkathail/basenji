@@ -142,7 +142,8 @@ def main():
     mode='eval',
     tfr_pattern=options.tfr_pattern,
     phylop=params_train.get('phylop', False),
-    target_slice=params_train.get('target_slice', None))
+    target_slice=params_train.get('target_slice', None),
+    phylop_smooth=params_train.get('phylop_smooth', None))
 
   # initialize model
   seqnn_model = seqnn.SeqNN(params_model)

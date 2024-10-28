@@ -17,6 +17,7 @@ import time
 from packaging import version
 import pdb
 import os
+import shutil
 
 import numpy as np
 import tensorflow as tf
@@ -307,12 +308,8 @@ class Trainer:
       managers.append(manager)
 
     # improvement variables
-    # valid_best = [-np.inf]*self.num_datasets
-    # unimproved = [0]*self.num_datasets
-
-    # phylop model after Epoch 87  
-    valid_best = [0.6124, 0.7024]
-    unimproved = [15, 19]
+    valid_best = [-np.inf]*self.num_datasets
+    unimproved = [0]*self.num_datasets
 
     ################################################################
     # training loop
@@ -547,6 +544,14 @@ class Trainer:
         valid_r2_epoch = valid_r2.result().numpy()
         print(' - valid_loss: %.4f - valid_r: %.4f - valid_r2: %.4f' % \
           (valid_loss_epoch, valid_r_epoch, valid_r2_epoch), end='')
+        wandb_metrics = {"epoch": ei,
+                         "train/loss": train_loss_epoch,
+                         "train/pearsonr": train_r_epoch,
+                         "train/r2": train_r2_epoch,
+                         "validation/loss": valid_loss_epoch,
+                         "validation/pearsonr": valid_r_epoch,
+                         "validation/r2": valid_r2_epoch}
+        self.run.log(wandb_metrics)
 
         # checkpoint
         manager.save()
@@ -561,6 +566,10 @@ class Trainer:
           seqnn_model.save('%s/model_best.h5'%self.out_dir)
         else:
           unimproved += 1
+
+        if (ei % 5) == 0 :
+          shutil.copyfile(f"{self.out_dir}/model_best.h5", f"{self.out_dir}/model_best_epoch_{ei}.h5")
+            
         print('', flush=True)
 
         # reset metrics

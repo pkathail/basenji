@@ -58,6 +58,9 @@ def main():
       help='Output directory for test statistics [Default: %default]')
   parser.add_option('--restore', dest='restore',
       help='Restore model and continue training [Default: %default]')
+  parser.add_option('--transfer', dest='transfer_weights',
+      default=None,
+      help='')
   parser.add_option('--trunk', dest='trunk',
       default=False, action='store_true',
       help='Restore only model trunk [Default: %default]')
@@ -112,7 +115,8 @@ def main():
     mode='train',
     tfr_pattern=options.tfr_train_pattern,
     phylop=params_train.get('phylop', False),
-    target_slice=params_train.get('target_slice', None)))
+    target_slice=params_train.get('target_slice', None),
+    phylop_smooth=params_train.get('phylop_smooth', None)))
 
     # load eval data
     eval_data.append(dataset.SeqDataset(data_dir,
@@ -121,7 +125,8 @@ def main():
     mode='eval',
     tfr_pattern=options.tfr_eval_pattern,
     phylop=params_train.get('phylop', False),
-    target_slice=params_train.get('target_slice', None)))
+    target_slice=params_train.get('target_slice', None),
+    phylop_smooth=params_train.get('phylop_smooth', None)))
 
   params_model['strand_pair'] = strand_pairs
 
@@ -136,9 +141,22 @@ def main():
     seqnn_model = seqnn.SeqNN(params_model)
 
     # restore
-    if options.restore:
+    if options.transfer_weights is not None:
+      params_model["seq_depth"] = 4
+      seqnn_model_tmp = seqnn.SeqNN(params_model)
+      seqnn_model_tmp.restore(options.restore, trunk=options.trunk)
+      restored_weights = seqnn_model_tmp.models[0].get_weights()
+      untrained_weights = seqnn_model.models[0].get_weights()
+      if options.transfer_weights == "all":
+        restored_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
+        seqnn_model.models[0].set_weights(restored_weights)
+      else:  # options.transfer_weights == "first_layer"
+        untrained_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
+        seqnn_model.models[0].set_weights(untrained_weights)
+    elif options.restore:
       seqnn_model.restore(options.restore, trunk=options.trunk)
-
+    
+        
     # initialize trainer
     seqnn_trainer = trainer.Trainer(params_train, train_data, 
                                     eval_data, options.out_dir)
@@ -164,8 +182,21 @@ def main():
       seqnn_model = seqnn.SeqNN(params_model)
 
       # restore
-      if options.restore:
+      if options.transfer_weights is not None:
+        params_model["seq_depth"] = 4
+        seqnn_model_tmp = seqnn.SeqNN(params_model)
+        seqnn_model_tmp.restore(options.restore, trunk=options.trunk)
+        restored_weights = seqnn_model_tmp.models[0].get_weights()
+        untrained_weights = seqnn_model.models[0].get_weights()
+        if options.transfer_weights == "all":
+          restored_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
+          seqnn_model.models[0].set_weights(restored_weights)
+        else:  # options.transfer_weights == "first_layer"
+          untrained_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
+          seqnn_model.models[0].set_weights(untrained_weights)
+      elif options.restore:
         seqnn_model.restore(options.restore, options.trunk)
+      
 
       # initialize trainer
       seqnn_trainer = trainer.Trainer(params_train, train_data, eval_data, options.out_dir,
