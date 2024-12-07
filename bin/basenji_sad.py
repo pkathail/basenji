@@ -84,7 +84,7 @@ def main():
       default='original_phylop', type='str',
       help='How to mask phylop input channel. Options: original_phylop, recomputed_phylop, full_mask, variant_mask')
   parser.add_option('--phylop_smooth', dest='phylop_smooth',
-      default=1, type='int',
+      default="1", type='str',
       help='')
   (options, args) = parser.parse_args()
 
@@ -146,6 +146,7 @@ def main():
 
   options.shifts = [int(shift) for shift in options.shifts.split(',')]
   options.sad_stats = options.sad_stats.split(',')
+  options.phylop_smooth = [int(p) for p in options.phylop_smooth.split(",")]
 
   #################################################################
   # read parameters and targets
@@ -254,7 +255,6 @@ def main():
     snps_1hot = np.array(snp_1hot_list)
 
     if params_train.get('phylop', False) is not False:
-      options.phylop_smooth = [int(p) for p in options.phylop_smooth.split(",")]
       left_len = params_model['seq_length'] // 2 - 1
       right_len = params_model['seq_length'] // 2
       seq_start = snp.pos - left_len
@@ -303,6 +303,7 @@ def main():
       snps_1hot = np.concatenate([snps_1hot, np.stack([seq_phylop, alt_seq_phylop])], axis=2)
 
     # get predictions
+    params_train['batch_size'] = 16
     if params_train['batch_size'] == 1:
       ref_preds = seqnn_model(snps_1hot[:1], training=options.training_mode)[0]
       alt_preds = seqnn_model(snps_1hot[1:], training=options.training_mode)[0]

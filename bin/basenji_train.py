@@ -116,7 +116,8 @@ def main():
     tfr_pattern=options.tfr_train_pattern,
     phylop=params_train.get('phylop', False),
     target_slice=params_train.get('target_slice', None),
-    phylop_smooth=params_train.get('phylop_smooth', None)))
+    phylop_smooth=params_train.get('phylop_smooth', None),
+    phylop_mask=params_train.get('phylop_mask', False)))
 
     # load eval data
     eval_data.append(dataset.SeqDataset(data_dir,
@@ -126,7 +127,8 @@ def main():
     tfr_pattern=options.tfr_eval_pattern,
     phylop=params_train.get('phylop', False),
     target_slice=params_train.get('target_slice', None),
-    phylop_smooth=params_train.get('phylop_smooth', None)))
+    phylop_smooth=params_train.get('phylop_smooth', None),
+    phylop_mask=params_train.get('phylop_mask', False)))
 
   params_model['strand_pair'] = strand_pairs
 
@@ -144,15 +146,45 @@ def main():
     if options.transfer_weights is not None:
       params_model["seq_depth"] = 4
       seqnn_model_tmp = seqnn.SeqNN(params_model)
-      seqnn_model_tmp.restore(options.restore, trunk=options.trunk)
-      restored_weights = seqnn_model_tmp.models[0].get_weights()
-      untrained_weights = seqnn_model.models[0].get_weights()
+      try:
+        seqnn_model_tmp.restore(options.restore, trunk=options.trunk)
+      except:  # for grouped convs, the model has a different number of layers. For now hard-coding the params
+        params_file_tmp = "/global/scratch/users/poojakathail/basenji2/models/params_human.json"
+        with open(params_file_tmp) as params_open:
+          params = json.load(params_open)
+        params_model_tmp = params['model']
+        seqnn_model_tmp = seqnn.SeqNN(params_model_tmp)
+        seqnn_model_tmp.restore(options.restore, trunk=options.trunk)
+      restored_weights = seqnn_model_tmp.model.get_weights()
+      untrained_weights = seqnn_model.model.get_weights()
       if options.transfer_weights == "all":
-        restored_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
-        seqnn_model.models[0].set_weights(restored_weights)
+        # if models have same number of layers, concatenate new channel to original model
+        if len(restored_weights) == len(untrained_weights):
+          print("same number of layers")
+          restored_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
+          seqnn_model.model.set_weights(restored_weights)
+          if params_train.get("freeze_steps", None) is not None:
+            print("freezing weights")
+            for i, l in enumerate(seqnn_model.model.layers):
+              if i not in [4,5]:
+                l.trainable = False
+        # for grouped convs, model has a different number of layers and more filters. 
+        # initialize all layers/nodes possible manually
+        else:
+          print("different number of layers")
+          untrained_weights[0] = restored_weights[0]
+          for layer_i in range(2, 6):
+            untrained_weights[layer_i][:len(restored_weights[layer_i-1])] = restored_weights[layer_i-1]
+          untrained_weights[6][:,:restored_weights[5].shape[1],:] = restored_weights[5]
+          for layer_i in range(7, len(untrained_weights)):
+            untrained_weights[layer_i] = restored_weights[layer_i-1]
+          seqnn_model.model.set_weights(untrained_weights)
       else:  # options.transfer_weights == "first_layer"
-        untrained_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
-        seqnn_model.models[0].set_weights(untrained_weights)
+        if len(restored_weights) == len(untrained_weights):
+          untrained_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
+        else:
+          untrained_weights[0] = restored_weights[0]
+        seqnn_model.model.set_weights(untrained_weights)
     elif options.restore:
       seqnn_model.restore(options.restore, trunk=options.trunk)
     
@@ -180,24 +212,54 @@ def main():
 
       # initialize model
       seqnn_model = seqnn.SeqNN(params_model)
-
+        
       # restore
       if options.transfer_weights is not None:
         params_model["seq_depth"] = 4
         seqnn_model_tmp = seqnn.SeqNN(params_model)
-        seqnn_model_tmp.restore(options.restore, trunk=options.trunk)
-        restored_weights = seqnn_model_tmp.models[0].get_weights()
-        untrained_weights = seqnn_model.models[0].get_weights()
+        try:
+          seqnn_model_tmp.restore(options.restore, trunk=options.trunk)
+        except:  # for grouped convs, the model has a different number of layers. For now hard-coding the params
+          params_file_tmp = "/global/scratch/users/poojakathail/basenji2/models/params_human.json"
+          with open(params_file_tmp) as params_open:
+            params = json.load(params_open)
+          params_model_tmp = params['model']
+          seqnn_model_tmp = seqnn.SeqNN(params_model_tmp)
+          seqnn_model_tmp.restore(options.restore, trunk=options.trunk)
+          
+        restored_weights = seqnn_model_tmp.model.get_weights()
+        untrained_weights = seqnn_model.model.get_weights()
         if options.transfer_weights == "all":
-          restored_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
-          seqnn_model.models[0].set_weights(restored_weights)
+          # if models have same number of layers, concatenate new channel to original model
+          if len(restored_weights) == len(untrained_weights):
+            print("same number of layers")
+            restored_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
+            seqnn_model.model.set_weights(restored_weights)
+            if params_train.get("freeze_steps", None) is not None:
+              print("freezing weights")
+              for i, l in enumerate(seqnn_model.model.layers):
+                if i not in [4,5]:
+                  l.trainable = False
+          # for grouped convs, model has a different number of layers and more filters. 
+          # initialize all layers/nodes possible manually
+          else:
+            print("different number of layers")
+            untrained_weights[0] = restored_weights[0]
+            for layer_i in range(2, 6):
+              untrained_weights[layer_i][:len(restored_weights[layer_i-1])] = restored_weights[layer_i-1]
+            untrained_weights[6][:,:restored_weights[5].shape[1],:] = restored_weights[5]
+            for layer_i in range(7, len(untrained_weights)):
+              untrained_weights[layer_i] = restored_weights[layer_i-1]
+            seqnn_model.model.set_weights(untrained_weights)
         else:  # options.transfer_weights == "first_layer"
-          untrained_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
-          seqnn_model.models[0].set_weights(untrained_weights)
+          if len(restored_weights) == len(untrained_weights):
+            untrained_weights[0] = np.concatenate([restored_weights[0], untrained_weights[0][:,4:,:]], axis=1)
+          else:
+            untrained_weights[0] = restored_weights[0]
+          seqnn_model.model.set_weights(untrained_weights)
       elif options.restore:
-        seqnn_model.restore(options.restore, options.trunk)
+        seqnn_model.restore(options.restore, trunk=options.trunk)
       
-
       # initialize trainer
       seqnn_trainer = trainer.Trainer(params_train, train_data, eval_data, options.out_dir,
                                       strategy, params_train['num_gpu'], options.keras_fit)
@@ -207,9 +269,51 @@ def main():
 
   # train model
   if options.keras_fit:
+    # if params_train.get("freeze_steps", None) is not None:
+    #   untrained_phylop_weights = seqnn_model.model.layers[4].weights[0][:,4,:]
+    #   seqnn_trainer.fit_keras(seqnn_model, steps=params_train.get("freeze_steps", None))
+    #   trained_phylop_weights = seqnn_model.model.layers[4].weights[0][:,4,:]
+    #   if np.all(untrained_phylop_weights == trained_phylop_weights):
+    #     print("weights did not get updated", flush=True)
+
+    #   print("unfreezing weights", flush=True)
+    #   for i, l in enumerate(seqnn_model.model.layers):
+    #     l.trainable = True
+    #     if i == 4 and hasattr(l, "frozen_mask"):
+    #       # make all channels trainable
+    #       l.frozen_mask = tf.constant(np.zeros(l.frozen_mask.shape),dtype=tf.float32)
+
+    #   print("recompiling model", flush=True)
+    #   if params_train.get('num_gpu', 1) == 1:
+    #     seqnn_trainer.compile(seqnn_model)
+    #   else:
+    #     with strategy.scope():  
+    #       seqnn_trainer.compile(seqnn_model)
+
     seqnn_trainer.fit_keras(seqnn_model)
   else:
     if len(data_dirs) == 1:
+      if params_train.get("freeze_steps", None) is not None:
+        untrained_phylop_weights = seqnn_model.model.layers[4].weights[0][:,4,:]
+        seqnn_trainer.fit_tape(seqnn_model, steps=params_train.get("freeze_steps", None))
+        trained_phylop_weights = seqnn_model.model.layers[4].weights[0][:,4,:]
+        if np.all(untrained_phylop_weights == trained_phylop_weights):
+          print("weights did not get updated", flush=True)
+        
+        print("unfreezing weights", flush=True)
+        for i, l in enumerate(seqnn_model.model.layers):
+          l.trainable = True
+          if i == 4 and hasattr(l, "frozen_mask"):
+            # make all channels trainable
+            l.frozen_mask = tf.constant(np.zeros(l.frozen_mask.shape),dtype=tf.float32)
+
+        print("recompiling model", flush=True)
+        if params_train.get('num_gpu', 1) == 1:
+          seqnn_trainer.compile(seqnn_model)
+        else:
+          with strategy.scope():  
+            seqnn_trainer.compile(seqnn_model)
+      
       seqnn_trainer.fit_tape(seqnn_model)
     else:
       seqnn_trainer.fit2(seqnn_model)

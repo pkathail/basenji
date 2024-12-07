@@ -27,6 +27,7 @@ import tensorflow as tf
 TFR_INPUT = 'sequence'
 TFR_OUTPUT = 'target'
 TFR_PHYLOP = 'phylop'
+PHYLOP_MEAN = 0.1282642480306631
 
 def file_to_records(filename):
   return tf.data.TFRecordDataset(filename, compression_type='ZLIB')
@@ -35,7 +36,8 @@ def file_to_records(filename):
 class SeqDataset:
 
   def __init__(self, data_dir, split_label, batch_size, shuffle_buffer=128,
-               seq_length_crop=None, mode='eval', tfr_pattern=None, phylop=False, target_slice=None, phylop_smooth=None):
+               seq_length_crop=None, mode='eval', tfr_pattern=None, phylop=False, target_slice=None, phylop_smooth=None,
+               phylop_mask=False):
     """Initialize basic parameters; run compute_stats; run make_dataset."""
 
     self.data_dir = data_dir
@@ -48,6 +50,7 @@ class SeqDataset:
     self.phylop = phylop
     self.target_slice = target_slice
     self.phylop_smooth = phylop_smooth
+    self.phylop_mask = phylop_mask
 
     # read data parameters
     data_stats_file = '%s/statistics.json' % self.data_dir
@@ -126,7 +129,9 @@ class SeqDataset:
       if self.phylop:
         phylop = tf.io.decode_raw(parsed_features[TFR_PHYLOP], tf.float16)
         if not raw:
-          if self.phylop_smooth is not None:
+          if self.phylop_mask:
+            phylop = tf.constant(PHYLOP_MEAN, shape=(self.seq_length, 1), dtype=tf.float32)
+          elif self.phylop_smooth is not None:
             phylop_smooth_all = []
             for phylop_smooth_val in self.phylop_smooth:
               if phylop_smooth_val > 1:

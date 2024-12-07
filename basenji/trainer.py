@@ -142,14 +142,22 @@ class Trainer:
       tf.keras.callbacks.ModelCheckpoint('%s/model_check.h5'%self.out_dir),
       save_best]
 
+    # if steps is not None:
     seqnn_model.model.fit(
-      self.train_data[0].dataset,
-      epochs=self.train_epochs_max,
-      steps_per_epoch=self.train_epoch_batches[0],
-      callbacks=callbacks,
-      validation_data=self.eval_data[0].dataset,
-      validation_steps=self.eval_epoch_batches[0])
-
+        self.train_data[0].dataset,
+        epochs=self.train_epochs_max,
+        steps_per_epoch=self.train_epoch_batches[0],
+        callbacks=callbacks,
+        validation_data=self.eval_data[0].dataset,
+        validation_steps=self.eval_epoch_batches[0])
+    # else:
+    #   seqnn_model.model.fit(
+    #     self.train_data[0].dataset,
+    #     epochs=1,
+    #     steps_per_epoch=steps,
+    #     callbacks=callbacks,
+    #     validation_data=self.eval_data[0].dataset,
+    #     validation_steps=self.eval_epoch_batches[0])
 
   def fit2(self, seqnn_model):
     if not self.compiled:
@@ -417,10 +425,12 @@ class Trainer:
           f.write("\t".join([str(wandb_metrics[c]) for c in cols]) + "\n")
 
         
-  def fit_tape(self, seqnn_model):
+  def fit_tape(self, seqnn_model, steps=None):
     if not self.compiled:
       self.compile(seqnn_model)
     model = seqnn_model.model
+    print("Trainable weights: ", sum([np.prod(w.shape) for w in model.trainable_weights]), flush=True)
+    print("Non-trainable weights: ", sum([np.prod(w.shape) for w in model.non_trainable_weights]), flush=True)
     
     # metrics
     num_targets = model.output_shape[-1]
@@ -523,9 +533,23 @@ class Trainer:
             train_step(x, y)
           if ei == epoch_start and si == 0:
             print('Successful first step!', flush=True)
+          if ei == epoch_start and steps is not None and si+1 == steps:
+            return
+          # if ei == epoch_start and si == 0:
+          #   for i, l in enumerate(model.layers):
+          #     l.trainable = True
+          #     if i == 4 and hasattr(l, "frozen_mask"):
+          #         # make all channels trainable
+          #         l.frozen_mask = tf.constant(np.zeros(l.frozen_mask.shape),dtype=tf.float32)
+          #   print('Successfully unfroze all layers after 1 step!', flush=True)
+          #   print("Trainable weights: ", sum([np.prod(w.shape) for w in model.trainable_weights]), flush=True)
+          #   print("Non-trainable weights: ", sum([np.prod(w.shape) for w in model.non_trainable_weights]), flush=True)
 
         # evaluate
-        for x, y in self.eval_data[0].dataset:
+        eval_iter = iter(self.train_data[0].dataset)
+        for si in range(self.eval_epoch_batches[0]):
+        # for x, y in self.eval_data[0].dataset:
+          x, y = safe_next(eval_iter)
           if self.strategy is not None:
             eval_step_distr(x, y)
           else:
@@ -567,7 +591,7 @@ class Trainer:
         else:
           unimproved += 1
 
-        if (ei % 5) == 0 :
+        if (ei % 10) == 0:
           shutil.copyfile(f"{self.out_dir}/model_best.h5", f"{self.out_dir}/model_best_epoch_{ei}.h5")
             
         print('', flush=True)

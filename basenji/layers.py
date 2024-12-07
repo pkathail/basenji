@@ -19,6 +19,88 @@ from typing import Optional, List
 import numpy as np
 import tensorflow as tf
 
+
+class Conv1DWithFreeze(tf.keras.layers.Layer):
+    def __init__(self, filters, kernel_size, strides,
+                 padding, use_bias, dilation_rate,
+                 kernel_initializer, kernel_regularizer,
+                 frozen_channels, **kwargs):
+        super(Conv1DWithFreeze, self).__init__(**kwargs)
+        self.filters = filters
+        self.kernel_size = kernel_size
+        self.strides = strides
+        self.padding = padding
+        self.use_bias = use_bias
+        self.dilation_rate = dilation_rate
+        self.kernel_initializier = kernel_initializer
+        self.kernel_regularizer = kernel_regularizer
+        self.frozen_channels = frozen_channels
+
+    def get_config(self):
+        config = super().get_config().copy()
+        config.update({
+            'filters': self.filters,
+            'kernel_size': self.kernel_size,
+            'strides': self.strides,
+            'padding': self.padding,
+            'use_bias': self.use_bias,
+            'dilation_rate': self.dilation_rate,
+            'kernel_initializier': self.kernel_initializier,
+            'kernel_regularizer': self.kernel_regularizer,
+            'frozen_channels': self.frozen_channels,
+        })
+        return config
+
+    def build(self, input_shape):
+        # Initialize trainable kernel and bias
+        self.kernel = self.add_weight(
+            shape=(self.kernel_size, input_shape[-1], self.filters),
+            initializer=self.kernel_initializier,
+            trainable=True,
+            name='kernel'
+        )
+        if self.use_bias:
+            self.bias = self.add_weight(
+                shape=(self.filters,),
+                initializer='zeros',
+                trainable=True,
+                name='bias'
+            )
+
+        # Freeze part of the kernel corresponding to `frozen_channels`
+        self.frozen_mask = tf.constant(
+            np.concatenate([
+                np.ones((self.kernel_size, self.frozen_channels, self.filters)),  # Frozen channels
+                np.zeros((self.kernel_size, input_shape[-1] - self.frozen_channels, self.filters))  # Trainable channels
+            ], axis=1),
+            dtype=tf.float32
+        )
+
+    def call(self, inputs):
+        # Apply the frozen mask to stop gradients for specific channels
+        frozen_kernel = tf.stop_gradient(self.kernel * self.frozen_mask)
+        trainable_kernel = self.kernel * (1 - self.frozen_mask)
+        effective_kernel = frozen_kernel + trainable_kernel
+
+        # Perform convolution
+        if self.use_bias:
+            return tf.nn.conv1d(
+                inputs,
+                filters=effective_kernel,
+                stride=self.strides,
+                padding=self.padding.upper(),
+                dilations=self.dilation_rate
+            ) + self.bias
+        else:
+            return tf.nn.conv1d(
+                inputs,
+                filters=effective_kernel,
+                stride=self.strides,
+                padding=self.padding.upper(),
+                dilations=self.dilation_rate
+            )
+
+
 ############################################################
 # Basic
 ############################################################
@@ -1128,7 +1210,7 @@ class EnsembleReverseComplement(tf.keras.layers.Layer):
     ens_seqs_1hot = []
     for seq_1hot in seqs_1hot:
       if seq_1hot.shape[-1] > 4:
-        axis_order = [3, 1, 2, 0] + list(range(4, seq_1hot.shape[-1]))
+        axis_order = [3, 2, 1, 0] + list(range(4, seq_1hot.shape[-1]))
         rc_seq_1hot = tf.gather(seq_1hot, axis_order, axis=-1)
       else:
         rc_seq_1hot = tf.gather(seq_1hot, [3, 2, 1, 0], axis=-1)
@@ -1144,7 +1226,7 @@ class StochasticReverseComplement(tf.keras.layers.Layer):
   def call(self, seq_1hot, training=None):
     if training:
       if seq_1hot.shape[-1] > 4:
-        axis_order = [3, 1, 2, 0] + list(range(4, seq_1hot.shape[-1]))
+        axis_order = [3, 2, 1, 0] + list(range(4, seq_1hot.shape[-1]))
         rc_seq_1hot = tf.gather(seq_1hot, axis_order, axis=-1)
       else:
         rc_seq_1hot = tf.gather(seq_1hot, [3, 2, 1, 0], axis=-1)

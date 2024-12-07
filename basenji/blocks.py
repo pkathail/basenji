@@ -53,6 +53,11 @@ def conv_block(inputs, filters=None, kernel_size=1, activation='relu', activatio
   # choose convolution type
   if conv_type == 'separable':
     conv_layer = tf.keras.layers.SeparableConv1D
+  elif conv_type == 'grouped':
+    conv_layer_1 = tf.keras.layers.Conv1D
+    conv_layer_2 = tf.keras.layers.Conv1D
+  elif conv_type == 'frozen_4_channels':
+    conv_layer = layers.Conv1DWithFreeze
   else:
     conv_layer = tf.keras.layers.Conv1D
 
@@ -62,16 +67,52 @@ def conv_block(inputs, filters=None, kernel_size=1, activation='relu', activatio
   # activation
   current = layers.activate(current, activation)
 
-  # convolution
-  current = conv_layer(
-    filters=filters,
-    kernel_size=kernel_size,
-    strides=stride,
-    padding='same',
-    use_bias=(norm_type is None),
-    dilation_rate=dilation_rate,
-    kernel_initializer=kernel_initializer,
-    kernel_regularizer=tf.keras.regularizers.l2(l2_scale))(current)
+  if conv_type == 'grouped':
+    current_group_1 = current[:,:,:4]
+    current_group_2 = current[:,:,4:]
+
+    current_group_1 = conv_layer_1(
+      filters=filters[0],
+      kernel_size=kernel_size,
+      strides=stride,
+      padding='same',
+      use_bias=(norm_type is None),
+      dilation_rate=dilation_rate,
+      kernel_initializer=kernel_initializer,
+      kernel_regularizer=tf.keras.regularizers.l2(l2_scale))(current_group_1)
+    current_group_2 = conv_layer_2(
+      filters=filters[1],
+      kernel_size=kernel_size,
+      strides=stride,
+      padding='same',
+      use_bias=(norm_type is None),
+      dilation_rate=dilation_rate,
+      kernel_initializer=kernel_initializer,
+      kernel_regularizer=tf.keras.regularizers.l2(l2_scale))(current_group_2)
+    current = tf.keras.layers.Concatenate(axis=-1)([current_group_1,
+                                                    current_group_2])
+  elif conv_type == 'frozen_4_channels':
+    current = conv_layer(filters=filters,
+                         kernel_size=kernel_size,
+                          strides=stride,
+                          padding='same',
+                          use_bias=(norm_type is None),
+                          dilation_rate=dilation_rate,
+                          kernel_initializer=kernel_initializer,
+                          kernel_regularizer=tf.keras.regularizers.l2(l2_scale),
+                          frozen_channels=4)(current)
+                         
+  else:
+    # convolution
+    current = conv_layer(
+      filters=filters,
+      kernel_size=kernel_size,
+      strides=stride,
+      padding='same',
+      use_bias=(norm_type is None),
+      dilation_rate=dilation_rate,
+      kernel_initializer=kernel_initializer,
+      kernel_regularizer=tf.keras.regularizers.l2(l2_scale))(current)
 
   # normalize
   if norm_type == 'batch-sync':
